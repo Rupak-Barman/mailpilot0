@@ -22,7 +22,9 @@ router.get("/google",
 router.get("/google/callback",
   passport.authenticate("google", { session: false }),
   (req, res) => {
-    const token = jwt.sign({ id: req.user._id }, process.env.JWT_SECRET);
+    const token = jwt.sign({ id: req.user._id }, process.env.JWT_SECRET, {
+      expiresIn: "7d"
+    });
     res.redirect(`http://localhost:5173?token=${token}`);
   }
 );

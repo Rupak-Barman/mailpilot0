@@ -10,6 +10,10 @@ import {
   FiEdit2,
   FiTrash2,
   FiSave,
+  FiInfo,
+  FiChevronDown,
+  FiChevronUp,
+  FiMessageSquare,
 } from "react-icons/fi";
 
 import { Button } from "../../components/common/Button";
@@ -88,6 +92,7 @@ const EmailActionDetailContent = ({
   // Label editing state
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [labelValue, setLabelValue] = useState(item.label || "");
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     setForm({
@@ -98,7 +103,12 @@ const EmailActionDetailContent = ({
 
     setLabelValue(item.label || "");
     setIsEditingLabel(false);
+    setShowHistory(false);
   }, [item._id, item.to, item.subject, item.body, item.label]);
+
+  const history = item.conversationHistory || [];
+  const hasOlderTurns = history.length > 2;
+  const olderTurns = hasOlderTurns ? history.slice(0, history.length - 2) : [];
 
   const isDraft = item.type === "draft";
   const isSent = item.status === "sent";
@@ -263,16 +273,16 @@ const EmailActionDetailContent = ({
               )}
             </div>
 
-            {/* AI Label */}
+            {/* Category */}
             <div className="sm:col-span-2">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                AI Label
+                Category
               </p>
 
               {!isEditingLabel ? (
                 <div className="mt-2 flex items-center gap-2">
                   <Badge tone="blue">
-                    {item.label || "Unlabeled"}
+                    {item.label || "Uncategorized"}
                   </Badge>
 
                   {canEditDraft && (
@@ -280,7 +290,7 @@ const EmailActionDetailContent = ({
                       type="button"
                       onClick={() => setIsEditingLabel(true)}
                       disabled={isBusy}
-                      className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 disabled:opacity-50 dark:text-blue-400"
+                      className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900 disabled:opacity-50 dark:text-slate-400 dark:hover:text-slate-200"
                     >
                       <FiEdit2 className="h-3 w-3" />
                       Edit
@@ -294,19 +304,19 @@ const EmailActionDetailContent = ({
                     value={labelValue}
                     onChange={(e) => setLabelValue(e.target.value)}
                     maxLength={80}
-                    placeholder="Enter label"
+                    placeholder="Enter category"
                     autoFocus
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   />
 
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
-                      variant="success"
+                      variant="primary"
                       onClick={handleSaveLabel}
                       disabled={isUpdatingLabel}
                     >
                       <FiSave className="h-4 w-4" />
-                      {isUpdatingLabel ? "Saving..." : "Save Label"}
+                      {isUpdatingLabel ? "Saving..." : "Save Category"}
                     </Button>
 
                     <Button
@@ -331,13 +341,81 @@ const EmailActionDetailContent = ({
             </div>
           </div>
 
+          {/* Thread Conversation History (if earlier turns exist) */}
+          {hasOlderTurns && (
+            <div className="mt-4 border-b border-slate-200 pb-4 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowHistory(!showHistory)}
+                className="flex w-full items-center justify-between rounded-md border border-slate-200 bg-slate-100/60 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-100 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-slate-300 dark:hover:bg-zinc-900"
+              >
+                <span className="flex items-center gap-2">
+                  <FiMessageSquare className="h-3.5 w-3.5 text-slate-400" />
+                  Earlier thread history ({olderTurns.length} message{olderTurns.length > 1 ? "s" : ""})
+                </span>
+                {showHistory ? (
+                  <FiChevronUp className="h-4 w-4 text-slate-400" />
+                ) : (
+                  <FiChevronDown className="h-4 w-4 text-slate-400" />
+                )}
+              </button>
+
+              {showHistory && (
+                <div className="mt-3 space-y-3 pl-1">
+                  {olderTurns.map((turn, idx) => (
+                    <div
+                      key={idx}
+                      className={`relative rounded-lg border p-3 text-xs leading-relaxed ${
+                        turn.role === "incoming"
+                          ? "border-slate-200 bg-slate-50 text-slate-700 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-slate-300"
+                          : "border-slate-200 bg-white text-slate-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-slate-200"
+                      }`}
+                    >
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <span className="font-semibold uppercase tracking-wider text-[10px] text-slate-500 dark:text-slate-400">
+                          {turn.role === "incoming" ? "Incoming Email Summary" : `Sent ${titleCase(turn.type || "Reply")}`}
+                        </span>
+                        {turn.timestamp && (
+                          <span className="text-[10px] text-slate-400">
+                            {formatDateTime(turn.timestamp)}
+                          </span>
+                        )}
+                      </div>
+                      <p className="whitespace-pre-wrap">{turn.content}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Summary Section (placed BEFORE Generated Reply) */}
+          <div className="mt-5">
+            <div className="flex items-center justify-between">
+              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                <FiInfo className="h-3.5 w-3.5 text-slate-400" />
+                Summary
+              </p>
+            </div>
+
+            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50/70 p-3.5 text-sm leading-relaxed text-slate-700 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-slate-300">
+              {item.summary ? (
+                item.summary
+              ) : (
+                <p className="text-xs italic text-slate-400 dark:text-slate-500">
+                  No summary available for this email.
+                </p>
+              )}
+            </div>
+          </div>
+
           {/* Generated information */}
           <div className="mt-6 flex items-center justify-between">
-            <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-blue-600 dark:text-blue-200">
+            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
               {item.type === "reply" ? (
-                <FiCornerUpLeft className="h-4 w-4" />
+                <FiCornerUpLeft className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               ) : (
-                <FiFileText className="h-4 w-4" />
+                <FiFileText className="h-4 w-4 text-slate-500 dark:text-slate-400" />
               )}
 
               Generated {item.type}

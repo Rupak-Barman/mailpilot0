@@ -20,7 +20,7 @@ import {
 export const DraftReplyLogPage = () => {
   const [filters, setFilters] = useState({
     tab: "unchecked",
-    checked: "",
+    status: "",
     q: "",
     page: 1,
     limit: 20,
@@ -87,11 +87,27 @@ export const DraftReplyLogPage = () => {
       limit: filters.limit,
     };
 
-    if (filters.q) params.q = filters.q;
-    if (filters.checked) params.checked = filters.checked;
-    if (filters.tab === "unchecked") params.checked = "false";
-    if (filters.tab === "draft") params.type = "draft";
-    if (filters.tab === "reply") params.type = "reply";
+    if (filters.q?.trim()) params.q = filters.q.trim();
+
+    // Map tab filter
+    if (filters.tab === "unchecked") {
+      params.checked = "false";
+    } else if (filters.tab === "draft") {
+      params.type = "draft";
+    } else if (filters.tab === "reply") {
+      params.type = "reply";
+    }
+
+    // Map status filter
+    if (filters.status) {
+      if (filters.status === "unchecked") {
+        params.checked = "false";
+      } else if (filters.status === "checked") {
+        params.checked = "true";
+      } else {
+        params.status = filters.status;
+      }
+    }
 
     return params;
   }, [filters]);

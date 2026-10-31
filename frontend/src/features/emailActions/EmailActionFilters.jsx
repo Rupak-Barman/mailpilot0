@@ -1,55 +1,109 @@
+import { useEffect, useState } from "react";
 import { FiSearch } from "react-icons/fi";
 import { Input, Select } from "../../components/common/FormControls";
 
 const tabs = [
-  { label: "Unchecked", value: "unchecked" },
-  { label: "Drafts", value: "draft" },
-  { label: "Replies", value: "reply" },
-  { label: "All", value: "all" }
+  { label: "Unchecked", value: "unchecked", key: "unchecked" },
+  { label: "Drafts",    value: "draft",     key: "drafts" },
+  { label: "Replies",   value: "reply",     key: "replies" },
+  { label: "All",       value: "all",       key: "total" }
 ];
 
-export const EmailActionFilters = ({ filters, setFilters, summary }) => (
-  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-    <div className="flex gap-2 overflow-x-auto pb-1">
-      {tabs.map(tab => (
-        <button
-          key={tab.value}
-          type="button"
-          onClick={() => setFilters(current => ({ ...current, tab: tab.value, page: 1 }))}
-          className={`h-8 shrink-0 rounded-md border px-3 text-xs font-semibold transition ${
-            filters.tab === tab.value
-              ? "border-blue-300 bg-blue-500/15 text-blue-700 shadow-lg shadow-blue-500/10 dark:text-blue-100"
-              : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
-          }`}
-        >
-          {tab.label}
-          {tab.value === "unchecked" && (
-            <span className="ml-2 rounded-full bg-blue-200 px-2 py-0.5 text-xs text-blue-800 dark:bg-blue-300 dark:text-blue-950">
-              {summary?.unchecked || 0}
-            </span>
-          )}
-        </button>
-      ))}
-    </div>
+export const EmailActionFilters = ({ filters, setFilters, summary }) => {
+  const [searchTerm, setSearchTerm] = useState(filters.q || "");
 
-    <div className="grid gap-3 sm:grid-cols-[1fr_160px] xl:w-[520px]">
-      <div className="relative">
-        <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <Input
-          value={filters.q}
-          onChange={(event) => setFilters(current => ({ ...current, q: event.target.value, page: 1 }))}
-          placeholder="Search subject, recipient, body"
-          className="pl-9"
-        />
+  // Debounce search input by 300ms
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setFilters(current => {
+        if (current.q === searchTerm) return current;
+        return { ...current, q: searchTerm, page: 1 };
+      });
+    }, 300);
+
+    return () => clearTimeout(handler);
+  }, [searchTerm, setFilters]);
+
+  // Synchronize internal search state if filters.q is externally reset
+  useEffect(() => {
+    if (filters.q !== searchTerm && filters.q === "") {
+      setSearchTerm("");
+    }
+  }, [filters.q]);
+
+  const handleTabChange = (tabValue) => {
+    setFilters(current => ({
+      ...current,
+      tab: tabValue,
+      page: 1
+    }));
+  };
+
+  const handleStatusChange = (statusValue) => {
+    setFilters(current => ({
+      ...current,
+      status: statusValue,
+      page: 1
+    }));
+  };
+
+  return (
+    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+      {/* Tabs with accurate badges */}
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {tabs.map((tab) => {
+          const count = summary ? (summary[tab.key] ?? 0) : 0;
+          const isActive = filters.tab === tab.value;
+
+          return (
+            <button
+              key={tab.value}
+              type="button"
+              onClick={() => handleTabChange(tab.value)}
+              className={`h-8 shrink-0 rounded-md border px-3 text-xs font-medium transition ${
+                isActive
+                  ? "border-slate-300 bg-white text-slate-900 shadow-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-slate-100"
+                  : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-slate-400 dark:hover:bg-zinc-800"
+              }`}
+            >
+              {tab.label}
+              <span
+                className={`ml-2 rounded px-1.5 py-0.2 text-[11px] font-semibold ${
+                  isActive
+                    ? "bg-slate-100 text-slate-800 dark:bg-zinc-700 dark:text-slate-200"
+                    : "bg-slate-200/70 text-slate-600 dark:bg-zinc-800 dark:text-slate-400"
+                }`}
+              >
+                {count}
+              </span>
+            </button>
+          );
+        })}
       </div>
-      <Select
-        value={filters.checked}
-        onChange={(event) => setFilters(current => ({ ...current, checked: event.target.value, page: 1 }))}
-      >
-        <option value="">Any status</option>
-        <option value="false">Unchecked</option>
-        <option value="true">Checked</option>
-      </Select>
+
+      {/* Search and status filter */}
+      <div className="grid gap-3 sm:grid-cols-[1fr_170px] xl:w-[540px]">
+        <div className="relative">
+          <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search subject, recipient, body"
+            className="pl-9"
+          />
+        </div>
+
+        <Select
+          value={filters.status || ""}
+          onChange={(event) => handleStatusChange(event.target.value)}
+        >
+          <option value="">All statuses</option>
+          <option value="unchecked">Unchecked</option>
+          <option value="draft">Draft</option>
+          <option value="sent">Sent</option>
+          <option value="send_failed">Failed</option>
+        </Select>
+      </div>
     </div>
-  </div>
-);
+  );
+};

@@ -2,25 +2,62 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ── Design tokens ────────────────────────────────────────── */
+:root {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Primary – a restrained slate-blue */
+  --color-primary:        #3b61e8;
+  --color-primary-hover:  #2f51d0;
+  --color-primary-subtle: #eff3fe;
+
+  /* Semantic */
+  --color-success: #16a34a;
+  --color-warning: #b45309;
+  --color-error:   #dc2626;
+
+  /* Neutral surface */
+  --color-bg:         #f8fafc;
+  --color-surface:    #ffffff;
+  --color-border:     #e2e8f0;
+  --color-text:       #0f172a;
+  --color-text-muted: #64748b;
+
+  /* Spacing / radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+.dark {
+  --color-primary:        #6b8ef7;
+  --color-primary-hover:  #8aa4f9;
+  --color-primary-subtle: rgba(59, 97, 232, 0.12);
+
+  --color-bg:         #09090b;
+  --color-surface:    #18181b;
+  --color-border:     #27272a;
+  --color-text:       #f4f4f5;
+  --color-text-muted: #a1a1aa;
+}
+
+/* ── Base ─────────────────────────────────────────────────── */
 * {
   box-sizing: border-box;
 }
 
 html {
-  font-family: Outfit, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #ffffff; /* pure white for light mode base */
-  color: #0f172a; /* slate-900 */
-}
-
-.dark body {
-  background: #09090b; /* zinc-950 for dark mode base */
-  color: #f8fafc; /* slate-50 */
+  background: var(--color-bg);
+  color: var(--color-text);
 }
 
 button,
@@ -30,9 +67,16 @@ textarea {
   font: inherit;
 }
 
+/* ── Focus ring (accessibility) ───────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────── */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -40,8 +84,14 @@ textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #475569;
+  background: #cbd5e1;
   border-radius: 999px;
-  border: 3px solid transparent;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-color: transparent;
   background-clip: content-box;
 }

@@ -1,10 +1,77 @@
-docs
-Plan.txt
-*.zip
-Submissions
-Final*
-test
-server/data/lancedb/
+# ==============================================================================
+# Environment Variables & Credentials
+# ==============================================================================
+.env
+.env.*
+*.env
 server/.env
+server/.env.*
+frontend/.env
+frontend/.env.*
+!.env.example
+!server/.env.example
+!frontend/.env.example
+*.local
+*.pem
+*.key
+token.json
+credentials.json
+
+# ==============================================================================
+# Dependencies
+# ==============================================================================
 node_modules/
-task.md
+*/node_modules/
+
+# ==============================================================================
+# Production & Build Artifacts
+# ==============================================================================
+dist/
+dist-ssr/
+frontend/dist/
+build/
+*.tsbuildinfo
+
+# ==============================================================================
+# Local Database, LanceDB Vector Store & File Uploads
+# ==============================================================================
+server/data/
+server/data/lancedb/
+*.sqlite
+*.sqlite3
+*.db
+
+# ==============================================================================
+# Logs & Diagnostics
+# ==============================================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ==============================================================================
+# OS & IDE Files
+# ==============================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ==============================================================================
+# Temporary & Archive Files
+# ==============================================================================
+*.zip
+*.tar.gz
+Plan.txt
+Submissions/
+Final*/
+test/

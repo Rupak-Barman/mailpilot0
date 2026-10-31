@@ -7,7 +7,7 @@ import EmailAction from "../models/EmailAction.js";
 import { getGmail } from "../services/gmail.service.js";
 import { analyzeEmailAI } from "../services/aiEngine.js";
 import { updateAnalytics } from "../services/analytics.service.js";
-import { getHeader } from "../utils/helpers.js";
+import { getHeader, buildMimeMessage } from "../utils/helpers.js";
 
 const inFlight = new Set();
 
@@ -36,29 +36,6 @@ const textFromPayload = (payload) => {
   }
 
   return "";
-};
-
-const encodeRawMessage = ({ to, subject, body, inReplyTo, references }) => {
-  const headers = [
-    `To: ${to}`,
-    `Subject: ${subject.startsWith("Re:") ? subject : `Re: ${subject}`}`,
-    `Content-Type: text/html; charset="UTF-8"`
-  ];
-
-  if (inReplyTo) headers.push(`In-Reply-To: ${inReplyTo}`);
-  if (references) headers.push(`References: ${references}`);
-
-  const htmlBody = `
-    <div style="font-family: 'Outfit', Arial, sans-serif; font-size: 16px; color: #333333; line-height: 1.6;">
-      ${(body || "").replace(/\n/g, "<br>")}
-    </div>
-  `;
-
-  return Buffer.from(`${headers.join("\r\n")}\r\n\r\n${htmlBody}`)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
 };
 
 const processMessage = async ({ user, gmail, messageId }) => {
@@ -107,7 +84,7 @@ const processMessage = async ({ user, gmail, messageId }) => {
       return false;
     }
 
-    const { label, action: aiAction, body } = await analyzeEmailAI({
+    const { label, action: aiAction, body, summary } = await analyzeEmailAI({
       userId: user._id,
       subject,
       from,
@@ -134,40 +111,43 @@ const processMessage = async ({ user, gmail, messageId }) => {
       : finalAction !== "draft";
 
     if (["reply", "draft"].includes(finalAction)) {
-      const existingAction = await EmailAction.findOne({
-        userId: String(user._id),
-        sourceMessageId: messageId,
-        type: finalAction
-      });
+      const threadId = email.data.threadId;
+      const existingThreadAction = threadId
+        ? await EmailAction.findOne({
+            userId: String(user._id),
+            threadId
+          })
+        : null;
 
-      const raw = encodeRawMessage({
+      const raw = buildMimeMessage({
         to: from,
         subject,
         body,
         inReplyTo: messageHeaderId,
-        references
+        references,
+        isReply: true
       });
       let gmailMessageId = "";
       let gmailDraftId = "";
 
-      if (!existingAction && finalAction === "reply") {
+      if (finalAction === "reply") {
         const sent = await gmail.users.messages.send({
           userId: "me",
           requestBody: {
             raw,
-            threadId: email.data.threadId
+            threadId
           }
         });
         gmailMessageId = sent.data.id;
       }
 
-      if (!existingAction && finalAction === "draft") {
+      if (finalAction === "draft") {
         const draft = await gmail.users.drafts.create({
           userId: "me",
           requestBody: {
             message: {
               raw,
-              threadId: email.data.threadId
+              threadId
             }
           }
         });
@@ -175,19 +155,87 @@ const processMessage = async ({ user, gmail, messageId }) => {
         gmailMessageId = draft.data.message?.id || "";
       }
 
-      if (!existingAction) {
+      const cleanSummary = summary || snippet || "Incoming email message.";
+
+      if (existingThreadAction) {
+        // Build or migrate previous conversation history if it was empty
+        const history = [...(existingThreadAction.conversationHistory || [])];
+        if (history.length === 0 && existingThreadAction.body) {
+          history.push({
+            role: "incoming",
+            type: "summary",
+            content: existingThreadAction.summary || existingThreadAction.subject || "Original email",
+            messageId: existingThreadAction.sourceMessageId,
+            timestamp: existingThreadAction.createdAt || new Date()
+          });
+          history.push({
+            role: "outgoing",
+            type: existingThreadAction.type || "draft",
+            content: existingThreadAction.body,
+            timestamp: existingThreadAction.sentAt || existingThreadAction.updatedAt || new Date()
+          });
+        }
+
+        // Append the new turn
+        history.push({
+          role: "incoming",
+          type: "summary",
+          content: cleanSummary,
+          messageId,
+          timestamp: new Date()
+        });
+        history.push({
+          role: "outgoing",
+          type: finalAction,
+          content: body,
+          timestamp: new Date()
+        });
+
+        existingThreadAction.conversationHistory = history;
+        existingThreadAction.summary = cleanSummary;
+        existingThreadAction.body = body;
+        existingThreadAction.sourceMessageId = messageId;
+        existingThreadAction.gmailMessageId = gmailMessageId;
+        existingThreadAction.gmailDraftId = gmailDraftId;
+        existingThreadAction.type = finalAction;
+        existingThreadAction.label = label;
+        existingThreadAction.status = finalAction === "reply" ? "sent" : "draft";
+        existingThreadAction.checked = false;
+        existingThreadAction.checkedAt = null;
+        existingThreadAction.sentAt = finalAction === "reply" ? new Date() : null;
+
+        await existingThreadAction.save();
+      } else {
         await EmailAction.create({
           userId: String(user._id),
           sourceMessageId: messageId,
           gmailMessageId,
           gmailDraftId,
-          threadId: email.data.threadId,
+          threadId,
           type: finalAction,
           label,
           to: from,
           subject,
+          summary: cleanSummary,
           body,
-          checked: false
+          checked: false,
+          status: finalAction === "reply" ? "sent" : "draft",
+          sentAt: finalAction === "reply" ? new Date() : null,
+          conversationHistory: [
+            {
+              role: "incoming",
+              type: "summary",
+              content: cleanSummary,
+              messageId,
+              timestamp: new Date()
+            },
+            {
+              role: "outgoing",
+              type: finalAction,
+              content: body,
+              timestamp: new Date()
+            }
+          ]
         });
       }
     }

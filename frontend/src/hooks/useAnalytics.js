@@ -4,5 +4,7 @@ import { getAnalytics } from "../api/analytics.api";
 export const useAnalytics = (filters) =>
   useQuery({
     queryKey: ["analytics", filters],
-    queryFn: () => getAnalytics(filters)
+    queryFn: () => getAnalytics(filters),
+    refetchOnWindowFocus: true,
+    staleTime: 15000,
   });

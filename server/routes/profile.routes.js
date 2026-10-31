@@ -1,82 +1,180 @@
+// import express from "express";
+// import auth from "../middleware/auth.js";
+// import User from "../models/User.js";
+// import EmailAction from "../models/EmailAction.js";
+
+// const router = express.Router();
+
+// const sanitizeDescription = (value) =>
+//   String(value || "")
+//     .trim()
+//     .slice(0, 2000);
+
+// router.get("/", auth, async (req, res) => {
+//   const user = await User.findById(req.user.id).select("name email profileDescription");
+
+//   if (!user) {
+//     return res.status(404).json({ message: "User not found" });
+//   }
+
+//   res.json({
+//     name: user.name,
+//     email: user.email,
+//     profileDescription: user.profileDescription || ""
+//   });
+// });
+
+// router.get("/settings", auth, async (req, res) => {
+//   const user = await User.findById(req.user.id).select("name email profileDescription labels personas");
+
+//   if (!user) {
+//     return res.status(404).json({ message: "User not found" });
+//   }
+
+//   const [unchecked, drafts, replies, total] = await Promise.all([
+//     EmailAction.countDocuments({ userId: req.user.id, checked: false }),
+//     EmailAction.countDocuments({ userId: req.user.id, type: "draft" }),
+//     EmailAction.countDocuments({ userId: req.user.id, type: "reply" }),
+//     EmailAction.countDocuments({ userId: req.user.id })
+//   ]);
+
+//   res.json({
+//     profile: {
+//       name: user.name,
+//       email: user.email,
+//       profileDescription: user.profileDescription || ""
+//     },
+//     labels: user.labels,
+//     personas: user.personas || [],
+//     emailActionSummary: {
+//       unchecked,
+//       drafts,
+//       replies,
+//       total
+//     }
+//   });
+// });
+
+// router.patch("/", auth, async (req, res) => {
+//   const profileDescription = sanitizeDescription(req.body.profileDescription);
+
+//   const user = await User.findByIdAndUpdate(
+//     req.user.id,
+//     { profileDescription },
+//     {
+//       new: true,
+//       runValidators: true,
+//       select: "name email profileDescription"
+//     }
+//   );
+
+//   if (!user) {
+//     return res.status(404).json({ message: "User not found" });
+//   }
+
+//   res.json({
+//     name: user.name,
+//     email: user.email,
+//     profileDescription: user.profileDescription || ""
+//   });
+// });
+
+// export default router;
+
 import express from "express";
+
 import auth from "../middleware/auth.js";
 import User from "../models/User.js";
 import EmailAction from "../models/EmailAction.js";
 
 const router = express.Router();
 
-const sanitizeDescription = (value) =>
-  String(value || "")
-    .trim()
-    .slice(0, 2000);
-
+// Basic account information.
 router.get("/", auth, async (req, res) => {
-  const user = await User.findById(req.user.id).select("name email profileDescription");
+  try {
+    const user = await User.findById(req.user.id)
+      .select("name email");
 
-  if (!user) {
-    return res.status(404).json({ message: "User not found" });
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found."
+      });
+    }
+
+    return res.json({
+      name: user.name,
+      email: user.email
+    });
+  } catch (error) {
+    console.error("Get profile error:", error);
+
+    return res.status(500).json({
+      message: "Could not fetch profile."
+    });
   }
-
-  res.json({
-    name: user.name,
-    email: user.email,
-    profileDescription: user.profileDescription || ""
-  });
 });
 
+// Data required by the Profile & Rules page.
 router.get("/settings", auth, async (req, res) => {
-  const user = await User.findById(req.user.id).select("name email profileDescription labels personas");
+  try {
+    const user = await User.findById(req.user.id)
+      .select("name email labels personas");
 
-  if (!user) {
-    return res.status(404).json({ message: "User not found" });
-  }
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found."
+      });
+    }
 
-  const [unchecked, drafts, replies, total] = await Promise.all([
-    EmailAction.countDocuments({ userId: req.user.id, checked: false }),
-    EmailAction.countDocuments({ userId: req.user.id, type: "draft" }),
-    EmailAction.countDocuments({ userId: req.user.id, type: "reply" }),
-    EmailAction.countDocuments({ userId: req.user.id })
-  ]);
-
-  res.json({
-    profile: {
-      name: user.name,
-      email: user.email,
-      profileDescription: user.profileDescription || ""
-    },
-    labels: user.labels,
-    personas: user.personas || [],
-    emailActionSummary: {
+    const [
       unchecked,
       drafts,
       replies,
       total
-    }
-  });
-});
+    ] = await Promise.all([
+      EmailAction.countDocuments({
+        userId: req.user.id,
+        checked: false
+      }),
 
-router.patch("/", auth, async (req, res) => {
-  const profileDescription = sanitizeDescription(req.body.profileDescription);
+      EmailAction.countDocuments({
+        userId: req.user.id,
+        type: "draft"
+      }),
 
-  const user = await User.findByIdAndUpdate(
-    req.user.id,
-    { profileDescription },
-    {
-      new: true,
-      runValidators: true,
-      select: "name email profileDescription"
-    }
-  );
+      EmailAction.countDocuments({
+        userId: req.user.id,
+        type: "reply"
+      }),
 
-  if (!user) {
-    return res.status(404).json({ message: "User not found" });
+      EmailAction.countDocuments({
+        userId: req.user.id
+      })
+    ]);
+
+    return res.json({
+      profile: {
+        name: user.name,
+        email: user.email
+      },
+
+      labels: user.labels || [],
+      personas: user.personas || [],
+
+      emailActionSummary: {
+        unchecked,
+        drafts,
+        replies,
+        total
+      }
+    });
+  } catch (error) {
+    console.error("Get profile settings error:", error);
+
+    return res.status(500).json({
+      message: "Could not fetch profile settings."
+    });
   }
-
-  res.json({
-    name: user.name,
-    email: user.email,
-    profileDescription: user.profileDescription || ""
-  });
 });
 
 export default router;

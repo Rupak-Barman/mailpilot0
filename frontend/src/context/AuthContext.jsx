@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { setAuthToken } from "../api/client";
 import { AuthContext } from "./authContext";
 
-const TOKEN_KEY = "sendora_token";
-const THEME_KEY = "sendora_theme";
+const TOKEN_KEY = "mailpilot_token";
+const THEME_KEY = "mailpilot_theme";
 
 const readInitialToken = () => {
   const params = new URLSearchParams(window.location.search);

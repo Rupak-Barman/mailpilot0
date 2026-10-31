@@ -16,7 +16,7 @@ export const AppShell = () => {
       <Sidebar />
       <Topbar email={data?.profile?.email} />
       <main className="pb-20 pt-4 lg:ml-64 lg:pb-8">
-        <div className="mx-auto w-full max-w-7xl px-3 sm:px-5 lg:px-7">
+        <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
           <Outlet />
         </div>
       </main>

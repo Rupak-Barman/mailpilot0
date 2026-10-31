@@ -2,6 +2,7 @@
 import 'dotenv/config'; 
 import { google } from "googleapis";
 import axios from "axios";
+import { buildMimeMessage } from "../utils/helpers.js";
 
 export const getGmail = async (user) => {
   const auth = new google.auth.OAuth2(
@@ -68,39 +69,6 @@ export const setupDefaultLabels = async (user) => {
 };
 
 /**
- * Encode an email as a Gmail-compatible base64url MIME message.
- */
-const encodeDraftMessage = ({ to, subject, body }) => {
-  const safeHeader = (value = "") =>
-    String(value).replace(/[\r\n]+/g, " ").trim();
-
-  const safeTo = safeHeader(to);
-  const safeSubject = safeHeader(subject);
-
-  if (!safeTo) {
-    throw new Error("Recipient email is required");
-  }
-
-  const encodedSubject = `=?UTF-8?B?${Buffer.from(
-    safeSubject,
-    "utf8",
-  ).toString("base64")}?=`;
-
-  const message = [
-    `To: ${safeTo}`,
-    `Subject: ${encodedSubject}`,
-    "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    Buffer.from(String(body || ""), "utf8").toString("base64"),
-  ].join("\r\n");
-
-  return Buffer.from(message, "utf8")
-    .toString("base64url");
-};
-
-/**
  * Update an existing Gmail draft.
  *
  * The existing Gmail draft ID is retained.
@@ -113,7 +81,7 @@ export const updateGmailDraft = async (
     throw new Error("Gmail draft ID is missing");
   }
 
-  const raw = encodeDraftMessage({ to, subject, body });
+  const raw = buildMimeMessage({ to, subject, body, isReply: subject.startsWith("Re:") });
 
   const response = await gmail.users.drafts.update({
     userId: "me",

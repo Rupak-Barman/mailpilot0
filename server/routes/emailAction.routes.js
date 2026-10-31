@@ -66,7 +66,7 @@ router.get("/summary", auth, async (req, res) => {
 });
 
 router.get("/", auth, async (req, res) => {
-  const { checked, type, label, q } = req.query;
+  const { checked, type, label, q, status } = req.query;
   const page = asPositiveInt(req.query.page, 1, 10000);
   const limit = asPositiveInt(req.query.limit, 20, 100);
   const skip = (page - 1) * limit;
@@ -76,12 +76,17 @@ router.get("/", auth, async (req, res) => {
   if (checked === "true") filter.checked = true;
   if (checked === "false") filter.checked = false;
   if (["reply", "draft"].includes(type)) filter.type = type;
+  if (["draft", "sending", "sent", "send_failed"].includes(status)) {
+    filter.status = status;
+  }
   if (label) filter.label = label;
-  if (q) {
+  if (q && q.trim()) {
+    const escapedQ = q.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     filter.$or = [
-      { subject: { $regex: q, $options: "i" } },
-      { to: { $regex: q, $options: "i" } },
-      { body: { $regex: q, $options: "i" } },
+      { subject: { $regex: escapedQ, $options: "i" } },
+      { to: { $regex: escapedQ, $options: "i" } },
+      { body: { $regex: escapedQ, $options: "i" } },
+      { summary: { $regex: escapedQ, $options: "i" } },
     ];
   }
 
@@ -163,11 +168,11 @@ router.patch("/:id/label", auth, async (req, res) => {
     // Find the previous custom Gmail label
     const oldGmailLabel = previousLabel
       ? gmailLabels.find(
-          (item) =>
-            item.name.toLowerCase() ===
-              previousLabel.toLowerCase() &&
-            item.type === "user"
-        )
+        (item) =>
+          item.name.toLowerCase() ===
+          previousLabel.toLowerCase() &&
+          item.type === "user"
+      )
       : null;
 
     let newGmailLabelId = null;

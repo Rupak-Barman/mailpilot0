@@ -1,5 +1,31 @@
-node_modules
+# Dependencies
 node_modules/
+
+# Environment variables & secrets
 .env
-server/data/lancedb/
-server/.env
+.env.*
+!.env.example
+*.pem
+*.key
+token.json
+credentials.json
+
+# Local database & vector store data
+data/
+data/lancedb/
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
