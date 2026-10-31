@@ -1,0 +1,10 @@
+docs
+Plan.txt
+*.zip
+Submissions
+Final*
+test
+server/data/lancedb/
+server/.env
+node_modules/
+task.md
