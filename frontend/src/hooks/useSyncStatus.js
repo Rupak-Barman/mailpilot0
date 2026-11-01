@@ -10,3 +10,4 @@ export const useSyncStatus = () => {
     staleTime: 5_000
   });
 };
+

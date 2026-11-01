@@ -6,7 +6,9 @@ import {
   isInvalidGrantError,
   handleInvalidGrant,
   getOAuth2Client,
-  wrapWithInvalidGrantHandler,
+  getGmail,
+  withGmail,
+  InvalidGrantError,
   getProfile,
   listHistory
 } from "../services/gmail.service.js";
@@ -132,9 +134,27 @@ describe("Gmail service - OAuth2 client & error handling", () => {
     assert.equal(fakeUser.accessToken, "new_access");
   });
 
-  it("wrapWithInvalidGrantHandler catches invalid_grant and sets needsRelogin", async () => {
+  it("getGmail returns real googleapis client where gmail.users.messages.list and gmail.users.history.list are accessible functions", async () => {
+    const fakeUser = {
+      accessToken: "fake_token",
+      refreshToken: "fake_refresh",
+      save: async () => {}
+    };
+
+    const gmail = await getGmail(fakeUser);
+    assert.ok(gmail, "getGmail should return a client");
+    assert.ok(gmail.users, "gmail.users should be accessible without proxy error");
+    assert.equal(typeof gmail.users.messages.list, "function");
+    assert.equal(typeof gmail.users.history.list, "function");
+    assert.equal(typeof gmail.users.drafts.create, "function");
+    assert.equal(typeof gmail.users.drafts.update, "function");
+  });
+
+  it("withGmail catches invalid_grant, marks needsRelogin=true, sets syncStatus='error', and rethrows InvalidGrantError", async () => {
     let saved = false;
     const fakeUser = {
+      accessToken: "fake_token",
+      refreshToken: "fake_refresh",
       needsRelogin: false,
       syncStatus: "idle",
       syncError: null,
@@ -143,25 +163,23 @@ describe("Gmail service - OAuth2 client & error handling", () => {
       }
     };
 
-    const mockTarget = {
-      users: {
-        messages: {
-          list: async () => {
-            throw new Error("GaxiosError: invalid_grant");
-          }
-        }
-      }
-    };
-
-    const wrapped = wrapWithInvalidGrantHandler(mockTarget, fakeUser);
     await assert.rejects(
       async () => {
-        await wrapped.users.messages.list();
+        await withGmail(fakeUser, async (_gmail) => {
+          const err = new Error("invalid_grant");
+          throw err;
+        });
       },
-      /invalid_grant/
+      (err) => {
+        assert.ok(err instanceof InvalidGrantError);
+        assert.equal(err.code, "INVALID_GRANT");
+        return true;
+      }
     );
 
     assert.equal(fakeUser.needsRelogin, true);
+    assert.equal(fakeUser.syncStatus, "error");
+    assert.match(fakeUser.syncError, /re-login/i);
     assert.equal(saved, true);
   });
 

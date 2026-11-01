@@ -92,3 +92,4 @@ export const checkOllamaHealth = async () => {
     return { reachable: false, missingModels: [llmModel, embeddingModel] };
   }
 };
+
