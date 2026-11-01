@@ -881,6 +881,32 @@ server/scripts/
    - Early repo commits contained a legacy `GEMINI_API_KEY` in `server/.env` before it was removed. If that Gemini key was active, rotate it immediately in Google AI Studio / Google Cloud Console.
    - Live Google OAuth credentials in `server/.env` must never be staged or committed.
 
+### MongoDB `$` Query Operator Audit Table
+Global `mongoose.set("sanitizeFilter", true)` was removed as it wrapped internal query operators (such as `$exists` and `$ne`) in literal `$eq` objects, breaking Mongoose schema casting. Untrusted user input is now sanitized strictly at the Express HTTP boundary via `sanitizeRequestMiddleware`. All internal queries compile and cast cleanly:
+
+| File | Query Target | Operators Used | Cast Status | Purpose |
+|---|---|---|---|---|
+| `server/jobs/poll.job.js` | `User.find` | `$exists`, `$ne` | ✅ Casts cleanly | Select active users with valid refresh token who do not need re-login (`refreshToken: { $exists: true, $ne: null }, needsRelogin: { $ne: true }`) |
+| `server/jobs/poll.job.js` | `EmailAction.find` | `$or`, `$in` | ✅ Casts cleanly | Find matching conversations by thread header IDs in turns |
+| `server/jobs/poll.job.js` | `EmailAction.find` | `$gte` | ✅ Casts cleanly | Follow-up conversation grouping window check (`updatedAt: { $gte: windowStart }`) |
+| `server/jobs/poll.job.js` | `ProcessedEmail.find` | `$lt` | ✅ Casts cleanly | Stale processing recovery query (`status: 'processing', updatedAt: { $lt: 5minAgo }`) |
+| `server/jobs/poll.job.js` | `ProcessedEmail.find` | `$lte` | ✅ Casts cleanly | Scheduled retry queue query (`status: 'failed', nextRetryAt: { $lte: now }`) |
+| `server/jobs/poll.job.js` | `ProcessedEmail.find` | `$in` | ✅ Casts cleanly | Claim-first deduplication check (`messageId: { $in: ids }, status: { $in: [...] }`) |
+| `server/services/reconcile.service.js` | `EmailAction.find` | `$or`, `$in`, `$exists` | ✅ Casts cleanly | Select pending turns for draft and manual reply reconciliation |
+| `server/services/reconcile.service.js` | `ProcessedEmail.findOneAndUpdate` | `$set` | ✅ Casts cleanly | Mark reconciliation resolution (`ai_draft_sent`, `manual`, `none`) |
+| `server/routes/analytics.routes.js` | `ProcessedEmail.countDocuments` | `$gte`, `$lte` | ✅ Casts cleanly | Range filtering for processing metrics (`createdAt: { $gte, $lte }`) |
+| `server/routes/analytics.routes.js` | `ProcessedEmail.countDocuments` | `$in` | ✅ Casts cleanly | Manual vs AI-assisted resolution count (`resolution: { $in: ['manual', 'ai_assisted'] }`) |
+| `server/routes/analytics.routes.js` | `EmailAction.countDocuments` | `$or` | ✅ Casts cleanly | Pending drafts count across top-level and turn status |
+| `server/routes/analytics.routes.js` | `ProcessedEmail.aggregate` | `$match`, `$exists`, `$ne`, `$group`, `$sum` | ✅ Casts cleanly | Aggregation pipeline for label breakdown |
+| `server/routes/emailAction.routes.js` | `EmailAction.find` | `$or`, `$and`, `$expr`, `$arrayElemAt`, `$size`, `$exists`, `$not`, `$in`, `$eq`, `$ne`, `$regex` | ✅ Casts cleanly | Tab views (Drafts, Replies, Failed, Unchecked) and full-text search filters |
+| `server/routes/emailAction.routes.js` | `EmailAction.findOneAndUpdate` | `$set`, `returnDocument: "after"` | ✅ Casts cleanly | Check-off toggle updating `checked` and `checkedAt` |
+| `server/routes/label.routes.js` | `User.findOneAndUpdate` | `$push`, `$pull` | ✅ Casts cleanly | Create and remove custom routing labels on user document |
+| `server/routes/profile.routes.js` | `User.findByIdAndUpdate` | `$set` | ✅ Casts cleanly | Update user settings (e.g. `defaultCc`, `groupBySender`) |
+| `server/services/migration.service.js` | `User.find` | `$exists`, `$ne` | ✅ Casts cleanly | Idempotent token migration selector (`refreshToken: { $exists: true, $ne: null }`) |
+| `server/services/migration.service.js` | `User.updateMany` | `$exists`, `$unset` | ✅ Casts cleanly | Drop legacy `accessToken` field from all user documents |
+| `server/tools/migrate-email-actions.js` | `EmailAction.deleteMany` | `$in` | ✅ Casts cleanly | Offline database migration cleanup of duplicate threads |
+| `server/tools/rag-distance-report.js` | `User.find` | `$exists` | ✅ Casts cleanly | Offline tool scanning users with configured labels |
+
 ### Test plan
 - [x] Complete login flow; confirm no token appears in browser URL bar.
 - [x] Expire/invalidate JWT; confirm frontend redirects to login (not hangs).

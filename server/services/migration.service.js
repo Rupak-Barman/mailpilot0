@@ -43,3 +43,4 @@ export async function migrateTokens(UserModel = User) {
     throw err;
   }
 }
+

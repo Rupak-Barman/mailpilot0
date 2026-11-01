@@ -364,17 +364,26 @@ export function escapeRegex(text) {
 }
 
 /**
- * Recursively strip MongoDB query operator keys (keys starting with $) from user input objects.
+ * Recursively strip MongoDB query operator keys (keys starting with $ or containing .) from user input objects.
  */
-export function stripMongoOperators(obj) {
+export function stripMongoOperators(obj, maxDepth = 10, currentDepth = 0) {
+  if (currentDepth >= maxDepth) return undefined;
   if (!obj || typeof obj !== "object") return obj;
+  if (obj instanceof Date || obj instanceof RegExp || Buffer.isBuffer(obj)) return obj;
+
   if (Array.isArray(obj)) {
-    return obj.map(stripMongoOperators);
+    return obj
+      .map((item) => stripMongoOperators(item, maxDepth, currentDepth + 1))
+      .filter((item) => item !== undefined);
   }
+
   const clean = {};
   for (const [key, val] of Object.entries(obj)) {
-    if (!key.startsWith("$")) {
-      clean[key] = stripMongoOperators(val);
+    if (!key.startsWith("$") && !key.includes(".")) {
+      const sanitizedVal = stripMongoOperators(val, maxDepth, currentDepth + 1);
+      if (sanitizedVal !== undefined) {
+        clean[key] = sanitizedVal;
+      }
     }
   }
   return clean;

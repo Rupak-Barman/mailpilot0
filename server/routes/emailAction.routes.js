@@ -1281,7 +1281,7 @@ router.patch("/:id/check", auth, async (req, res) => {
       checked,
       checkedAt: checked ? new Date() : null,
     },
-    { new: true },
+    { returnDocument: "after" },
   );
 
   if (!action) {

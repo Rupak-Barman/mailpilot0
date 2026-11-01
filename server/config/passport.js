@@ -31,7 +31,7 @@ passport.use(
             syncStatus: "idle",
             syncError: null
           },
-          { upsert: true, new: true }
+          { upsert: true, returnDocument: "after" }
         );
 
         // Default Labels

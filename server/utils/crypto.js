@@ -115,8 +115,12 @@ export function decryptUserRefreshToken(user) {
     return decryptToken(user.refreshToken);
   } catch (err) {
     const userIdentifier = user._id || user.email || "unknown";
-    console.error(`[auth] Refresh token decryption failed for user ${userIdentifier}; marking needsRelogin.`);
+    console.error(
+      `[auth] Refresh token decryption failed for user ${userIdentifier}. The encryption key may have changed or stored token is corrupted. Please sign in again.`
+    );
     user.needsRelogin = true;
+    user.syncStatus = "error";
+    user.syncError = "Authentication expired: could not decrypt stored credentials. Please sign in again.";
     if (typeof user.save === "function") {
       user.save().catch(() => {});
     }

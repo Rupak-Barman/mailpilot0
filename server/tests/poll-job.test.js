@@ -1250,7 +1250,7 @@ describe("Poll job & sync engine - BATCH 1 part 2B", () => {
         syncStatus: "idle",
         syncError: null
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
 
     assert.equal(updatedFields.needsRelogin, false, "needsRelogin flag must be cleared to false");

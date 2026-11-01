@@ -8,7 +8,8 @@ import {
   createCorsMiddleware,
   createHelmetMiddleware,
   generalRateLimiter,
-  authRateLimiter
+  authRateLimiter,
+  sanitizeRequestMiddleware
 } from "./config/security.js";
 import { migrateTokens } from "./services/migration.service.js";
 
@@ -34,6 +35,9 @@ app.use(createCorsMiddleware());
 
 // Size-limited JSON body parser
 app.use(express.json({ limit: "1mb" }));
+
+// Boundary input sanitizer (strips $ and . keys from body, query, params)
+app.use(sanitizeRequestMiddleware);
 
 // Passport initialization
 app.use(passport.initialize());

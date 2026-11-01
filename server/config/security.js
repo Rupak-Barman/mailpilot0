@@ -89,3 +89,64 @@ export const authRateLimiter = rateLimit({
     return req.path === "/logout";
   }
 });
+
+/**
+ * Sanitize untrusted input objects at the Express boundary.
+ * Recursively strips keys starting with "$" (query operator injection)
+ * or containing "." (path traversal / mongo subdocument injection).
+ * Imposes a recursion depth limit (default 10) to prevent ReDoS / call-stack overflow.
+ */
+export function sanitizeObject(target, maxDepth = 10, currentDepth = 0) {
+  if (currentDepth >= maxDepth) return undefined;
+  if (!target || typeof target !== "object") return target;
+
+  // Preserve Date, RegExp, Buffer instances
+  if (target instanceof Date || target instanceof RegExp || Buffer.isBuffer(target)) {
+    return target;
+  }
+
+  if (Array.isArray(target)) {
+    return target
+      .map((item) => sanitizeObject(item, maxDepth, currentDepth + 1))
+      .filter((item) => item !== undefined);
+  }
+
+  const clean = {};
+  for (const [key, value] of Object.entries(target)) {
+    // Drop keys starting with "$" or containing "."
+    if (!key.startsWith("$") && !key.includes(".")) {
+      const sanitizedVal = sanitizeObject(value, maxDepth, currentDepth + 1);
+      if (sanitizedVal !== undefined) {
+        clean[key] = sanitizedVal;
+      }
+    }
+  }
+  return clean;
+}
+
+/**
+ * Express middleware to sanitize req.body, req.query, and req.params at the HTTP boundary.
+ */
+export function sanitizeRequestMiddleware(req, _res, next) {
+  if (req.body && typeof req.body === "object") {
+    req.body = sanitizeObject(req.body);
+  }
+
+  if (req.query && typeof req.query === "object") {
+    try {
+      const clean = sanitizeObject(req.query);
+      for (const k of Object.keys(req.query)) {
+        if (!Object.prototype.hasOwnProperty.call(clean, k)) {
+          delete req.query[k];
+        }
+      }
+      Object.assign(req.query, clean);
+    } catch {}
+  }
+
+  if (req.params && typeof req.params === "object") {
+    req.params = sanitizeObject(req.params);
+  }
+
+  next();
+}
