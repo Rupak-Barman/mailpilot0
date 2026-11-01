@@ -12,6 +12,53 @@ const LLM_MODEL =
   process.env.OLLAMA_LLM_MODEL || "qwen2.5-coder:7b";
 
 /**
+ * Custom typed errors for AI engine operations.
+ */
+export class AIError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = "AIError";
+    this.isTransient = Boolean(options.isTransient);
+    this.code = options.code || "AI_ERROR";
+    if (options.cause) this.cause = options.cause;
+  }
+}
+
+export class AITransientError extends AIError {
+  constructor(message, cause) {
+    super(message, { isTransient: true, code: "AI_TRANSIENT", cause });
+    this.name = "AITransientError";
+  }
+}
+
+export class AIPermanentError extends AIError {
+  constructor(message, cause) {
+    super(message, { isTransient: false, code: "AI_PERMANENT", cause });
+    this.name = "AIPermanentError";
+  }
+}
+
+export const isTransientAIError = (error) => {
+  if (!error) return false;
+  if (error instanceof AITransientError || error.isTransient) return true;
+  const msg = String(error?.message || "").toLowerCase();
+  const code = String(error?.code || error?.cause?.code || "");
+  if (code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ECONNRESET" || code === "EAI_AGAIN") {
+    return true;
+  }
+  if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+    return true;
+  }
+  if (msg.includes("fetch failed") || msg.includes("econnrefused") || msg.includes("timeout") || msg.includes("etimedout")) {
+    return true;
+  }
+  if (/ollama error (429|5\d\d)/i.test(msg)) {
+    return true;
+  }
+  return false;
+};
+
+/**
  * Parse JSON returned by Qwen.
  */
 const parseJson = (text) => {
@@ -151,6 +198,12 @@ Return only JSON: {"body":"generated email response"}`;
     return { label: selectedLabel.name, action: configuredAction, body: cleanBody, summary };
   } catch (error) {
     console.error("Local AI email analysis failed:", error.message);
-    return { label: "", action: "none", body: "", summary: "" };
+    if (isTransientAIError(error)) {
+      throw new AITransientError(error.message, error);
+    }
+    if (error instanceof AIError) {
+      throw error;
+    }
+    throw new AIPermanentError(error.message, error);
   }
 };
