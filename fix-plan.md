@@ -606,8 +606,8 @@ Email actions only supported single primary recipients (`to`), without CC or BCC
 1. **Data Model (`User.js`, `EmailAction.js`):**
    - Each `turn.outgoing` gets `to[]`, `cc[]`, `bcc[]` as arrays of `{ name, email }`.
    - Lazy migration for existing records: missing fields default to empty arrays `[]` via Mongoose subdocument schema and pre-init / setter normalization.
-   - User settings get `settings.defaultCc[]` (array of email strings).
-   - Label rules get per-label option `alwaysCc[]` (array of email strings).
+   - User settings get `settings.defaultCc[]` (array of email strings) *(Removed in Batch 5.9)*.
+   - Label rules get per-label option `alwaysCc[]` (array of email strings) *(Removed in Batch 5.9)*.
    - Backwards-compatible with Batch 6 MIME builder when passing strings or recipient arrays.
 2. **MIME Builder (`server/utils/helpers.js`):**
    - `buildMimeMessage` accepts `cc` and `bcc` and writes RFC 2822 `Cc` and `Bcc` headers.
@@ -617,39 +617,35 @@ Email actions only supported single primary recipients (`to`), without CC or BCC
 3. **Reply-All Suggestions & Automation (`server/jobs/poll.job.js`):**
    - When a draft or auto-reply is generated from an incoming message with other recipients, stores them as suggestions only in `outgoing.suggestedCc`.
    - Never auto-sends to reply-all recipients without explicit user selection.
-   - Always applies configured user default CC and matched label "always CC" automatically.
+   - Automatic CC removed in Batch 5.9 (nothing is CC'd automatically; users explicitly add CC).
 4. **API Endpoints (`emailAction.routes.js`, `profile.routes.js`, `label.routes.js`):**
    - `PATCH /email-actions/:id` accepts `to`, `cc`, `bcc`, `subject`, and `body`.
    - Draft send (`POST /:id/send`), update draft (`PATCH /:id`), and manual send (`POST /:id/manual-send`) pass them through to Gmail and update the stored record.
    - Reconcile service (`reconcile.service.js`) reads `Cc` and `Bcc` back from Gmail drafts.
-   - Profile settings route (`PATCH /profile/settings`) accepts and saves `defaultCc`.
-   - Label routes (`POST /labels`, `PATCH /labels/:labelId`) accept and save `alwaysCc`.
+   - Profile settings and label endpoints previously accepted `defaultCc` / `alwaysCc` *(Removed in Batch 5.9)*.
 5. **Frontend UI:**
    - Reusable `EmailChipInput` with email format validation and multi-address paste support.
    - Latest turn reply editor displays To, Cc, and Bcc fields (with Cc and Bcc collapsed behind "Cc / Bcc" toggle links).
    - Displays "Add reply-all recipients" button when suggested recipients exist.
    - Displays CC recipients on sent turns in the timeline.
    - Failed compose box includes the same To, Cc, Bcc fields and "Add reply-all recipients".
-   - Profile & Rules includes Default CC configuration in AccountPanel.
-   - Routing Rules includes "Always CC" in LabelForm and LabelTable.
+   - `defaultCc` in AccountPanel and `alwaysCc` in LabelForm/LabelTable *(Removed in Batch 5.9)*.
 
 ### Files changed / created
 | File | Role |
 |---|---|
-| `server/models/User.js` | Added `settings.defaultCc` and `labels[].alwaysCc` |
+| `server/models/User.js` | Added `settings.defaultCc` and `labels[].alwaysCc` *(Removed in Batch 5.9)* |
 | `server/models/EmailAction.js` | Defined `RecipientSchema`, `to[]`, `cc[]`, `bcc[]`, `suggestedCc[]` on `OutgoingTurnSchema` with lazy migration |
 | `server/utils/helpers.js` | Updated `buildMimeMessage` for CC/BCC, validation, deduplication, injection prevention, recipient limits, and recipient helpers |
 | `server/services/gmail.service.js` | `createGmailDraft` and `updateGmailDraft` pass through CC, BCC, and userEmail |
 | `server/services/reconcile.service.js` | Reads `Cc` and `Bcc` from Gmail drafts and updates turn outgoing and action records |
-| `server/jobs/poll.job.js` | Generates `suggestedCc`, applies default and label CC, passes CC/BCC to `buildMimeMessage` |
+| `server/jobs/poll.job.js` | Generates `suggestedCc`, passes CC/BCC to `buildMimeMessage` *(Automatic CC removed in Batch 5.9)* |
 | `server/routes/emailAction.routes.js` | Updated draft update, send, and manual-send endpoints for CC and BCC |
-| `server/routes/profile.routes.js` | Updated settings endpoint for `defaultCc` |
-| `server/routes/label.routes.js` | Updated label create/patch endpoints for `alwaysCc` |
+| `server/routes/profile.routes.js` | Settings endpoint *(defaultCc removed in Batch 5.9)* |
+| `server/routes/label.routes.js` | Label endpoints *(alwaysCc removed in Batch 5.9)* |
 | `frontend/src/components/common/EmailChipInput.jsx` | Reusable email chip input component with validation and paste handling |
 | `frontend/src/features/emailActions/EmailActionDetail.jsx` | Reply editor, Failed compose box, timeline CC display, and "Add reply-all recipients" |
-| `frontend/src/features/profile/AccountPanel.jsx` | Added Default CC input in Profile & Rules |
-| `frontend/src/features/labels/LabelForm.jsx` | Added Always CC field to label rule creation form |
-| `frontend/src/features/labels/LabelTable.jsx` | Added Always CC display column in label rules table |
+| `frontend/src/features/profile/AccountPanel.jsx` | AccountPanel *(defaultCc removed in Batch 5.9)* |
 | `frontend/src/api/emailActions.api.js` | API client passes `cc` and `bcc` on update, send, and manual send |
 | `server/tests/cc-bcc.test.js` | Comprehensive unit tests for headers, own-address removal, invalid address rejection, header injection, chips, and CC application |
 
@@ -659,7 +655,6 @@ Email actions only supported single primary recipients (`to`), without CC or BCC
 - [x] Invalid addresses rejected: malformed emails rejected with errors in `to`, `cc`, and `bcc`.
 - [x] Header injection stripped: CR/LF in subject, name, and address sanitized or rejected.
 - [x] Recipient parsing, deduplication, and 20-recipient limit enforced.
-- [x] Default CC and label always CC applied in poll cycle; other recipients saved as `suggestedCc`.
 - [x] Reconcile reads CC and BCC from Gmail drafts.
 - [x] Frontend production build compiles without errors.
 - [x] All 160 server tests pass with 0 failures.
@@ -755,6 +750,66 @@ Sample tested:
 4. **Unified Cancel Handler:** Prompts user to confirm discarding unsaved changes if `dirty`. Discards pending preview and restores last saved text.
 5. **Scoped Errors & Status Indicators:** Errors scoped per turnId and cleared on edit/save/retry. Status line indicates sync state with retry action.
 
+---
+
+## Batch 5.9 – Routing Rules redesign and Always-CC removal
+
+### Problem
+1. **Always CC & Default CC**: Automatic CC rules caused unintended leakage and unwanted automated copies. CC/BCC should strictly be manual per draft/reply with suggestions rather than automatic.
+2. **Routing Rules UI UX**: Form controls in the table were truncated ("Dra", "no1", "Flexib"), the Add Label form was a large block consuming page space above the table, knowledge base column showed unhelpful strings ("1 of 1 selected"), table had 9 crowded columns, and lacked mobile card responsive layouts.
+
+### Architecture & Fix Details
+1. **PART A – Remove Always CC & Default CC completely:**
+   - Removed `alwaysCc` from `User.labels` and `defaultCc` from `User.settings`.
+   - Updated label routes (`server/routes/label.routes.js`) to ignore/drop `alwaysCc` on creation and patch.
+   - Updated profile settings route (`server/routes/profile.routes.js`) to drop `defaultCc`.
+   - Updated poll cycle (`server/jobs/poll.job.js`): `appliedCc = []` (nothing is CC'd automatically; incoming CC/To recipients remain stored as suggestions in `suggestedCc`).
+   - Removed Always CC form field from `LabelForm` and table column from `LabelTable`.
+   - Removed Default CC from `AccountPanel.jsx`.
+   - Added idempotent data cleanup tool `server/tools/remove-always-cc.js` supporting `--dry-run` and using `arrayFilters` + `updateMany` to unset `labels.$[elem].alwaysCc` and `settings.defaultCc`.
+2. **PART B – Redesign Routing Rules (`ProfilePage.jsx` > Routing Rules):**
+   - **Clean List Layout:** 7 clean desktop columns:
+     1. Colour dot (palette swatch) and Name (wrapped, no truncation)
+     2. Action (compact select with inline quick-edit saving indicator, toast feedback, and error rollback)
+     3. Grounding (readable badge: Strict / Flexible)
+     4. Knowledge bases (chips with document names and `+N more` overflow chip with hover tooltip)
+     5. Persona (name or "Default")
+     6. Status toggle (with inline quick-edit saving indicator, toast feedback, and error rollback)
+     7. Actions menu (Edit opens side drawer, Delete opens confirmation dialog)
+   - **Responsive Mobile Layout:** Responsive cards on `<md` screens with no horizontal overflow at 360px.
+   - **Add / Edit Side Drawer (`RuleDrawer.jsx`):**
+     - Replaces inline block with "Add rule" button opening an accessible slide-over drawer shared by Add and Edit.
+     - Logical groups:
+       * 1. Rule Details: Name (required, 1-40 chars, case-insensitive uniqueness check, trimmed) and Colour palette (8 accessible swatches).
+       * 2. What should Mailpilot do?: Action selection (None / Draft / Reply) with one-line descriptions.
+       * 3. Writing Style: Tone (Friendly, Formal, Casual) and Persona dropdown.
+       * 4. Answer from my documents: Grounding mode (Strict / Flexible) and Knowledge bases multi-select with search and checkboxes.
+       * 5. Automation & Status: Mark as read in Gmail toggle, Active status toggle.
+     - **Smart Behaviour:** When Action is "None", hides/disables tone, persona, grounding, and knowledge bases with explanation "Writing style and document knowledge bases are not used when the action is None" (stored selections preserved).
+     - **Grounding Default & Inline Warnings:**
+       * Default is Strict when >=1 KB selected, Flexible when none.
+       * Inline warning when Strict selected with no KB: *"Warning: Every email will need a manual reply because no knowledge bases are selected."*
+       * Inline warning when Reply selected with Flexible: *"Warning: Replies will go out without checking your documents."*
+       * Warnings do not block saving.
+   - **Delete Confirmation (`DeleteRuleDialog.jsx`):** Accurate dialog explaining that rule is removed from Mailpilot, corresponding Gmail label is deleted, inbox emails are preserved without the label, and future emails won't match; disabled button with spinner while deleting.
+   - **Empty state & Loading skeleton:** Loading skeleton pulse and empty state with "Add rule" CTA.
+   - **Visuals & Accessibility:** WCAG 4.5:1 contrast, dark mode support, drawer focus trap, Escape key closes drawer, `aria-live` for save results.
+
+### Files changed / created
+| File | Role |
+|---|---|
+| `server/models/User.js` | Removed `settings.defaultCc` and `labels[].alwaysCc`; added `labels[].color` |
+| `server/routes/label.routes.js` | Removed `alwaysCc`; added `color` & `name` validation on create/update |
+| `server/routes/profile.routes.js` | Removed `defaultCc` from settings update |
+| `server/jobs/poll.job.js` | `appliedCc = []` (no automatic CC; keeps `suggestedCc`) |
+| `server/tools/remove-always-cc.js` | Idempotent cleanup script with `--dry-run` and `arrayFilters` |
+| `frontend/src/features/labels/ruleLogic.js` | Validation rules, grounding defaults, warning evaluator, optimistic updater |
+| `frontend/src/features/labels/RuleDrawer.jsx` | Side drawer for adding and editing rules with smart action none logic and warnings |
+| `frontend/src/features/labels/DeleteRuleDialog.jsx` | Accurate delete confirmation dialog |
+| `frontend/src/features/labels/LabelTable.jsx` | Redesigned table with 7 columns, inline quick edits, mobile cards, empty state, and loading skeleton |
+| `frontend/src/features/profile/AccountPanel.jsx` | Removed Default CC section |
+| `server/tests/routing-rules-redesign.test.js` | Comprehensive unit tests for logic, validation, schema, and cleanup tool |
+| `server/tests/cc-bcc.test.js` | Updated tests confirming no automatic CC and removal of alwaysCc/defaultCc |
 
 ---
 
@@ -901,7 +956,7 @@ Global `mongoose.set("sanitizeFilter", true)` was removed as it wrapped internal
 | `server/routes/emailAction.routes.js` | `EmailAction.find` | `$or`, `$and`, `$expr`, `$arrayElemAt`, `$size`, `$exists`, `$not`, `$in`, `$eq`, `$ne`, `$regex` | ✅ Casts cleanly | Tab views (Drafts, Replies, Failed, Unchecked) and full-text search filters |
 | `server/routes/emailAction.routes.js` | `EmailAction.findOneAndUpdate` | `$set`, `returnDocument: "after"` | ✅ Casts cleanly | Check-off toggle updating `checked` and `checkedAt` |
 | `server/routes/label.routes.js` | `User.findOneAndUpdate` | `$push`, `$pull` | ✅ Casts cleanly | Create and remove custom routing labels on user document |
-| `server/routes/profile.routes.js` | `User.findByIdAndUpdate` | `$set` | ✅ Casts cleanly | Update user settings (e.g. `defaultCc`, `groupBySender`) |
+| `server/routes/profile.routes.js` | `User.findByIdAndUpdate` | `$set` | ✅ Casts cleanly | Update user settings (e.g. `groupBySender`) |
 | `server/services/migration.service.js` | `User.find` | `$exists`, `$ne` | ✅ Casts cleanly | Idempotent token migration selector (`refreshToken: { $exists: true, $ne: null }`) |
 | `server/services/migration.service.js` | `User.updateMany` | `$exists`, `$unset` | ✅ Casts cleanly | Drop legacy `accessToken` field from all user documents |
 | `server/tools/migrate-email-actions.js` | `EmailAction.deleteMany` | `$in` | ✅ Casts cleanly | Offline database migration cleanup of duplicate threads |
@@ -1164,12 +1219,12 @@ These tests must pass before marking the fix plan complete.
 
 ### Batch 5.7 – CC and BCC
 - [x] 5.7.1 Update `OutgoingTurnSchema` with `to[]`, `cc[]`, `bcc[]`, `suggestedCc[]` (`{ name, email }`) and lazy migration
-- [x] 5.7.2 Add `settings.defaultCc[]` and label `alwaysCc[]` to `User.js`
+- [x] 5.7.2 Add `settings.defaultCc[]` and label `alwaysCc[]` to `User.js` *(Removed in Batch 5.9)*
 - [x] 5.7.3 Extend `buildMimeMessage` with `cc` & `bcc` headers, email validation, case-insensitive deduplication, own-address removal, CR/LF injection stripping, and 20-recipient limit
-- [x] 5.7.4 Incoming messages with other recipients store `outgoing.suggestedCc` (not sent automatically); default and label CC applied automatically
+- [x] 5.7.4 Incoming messages with other recipients store `outgoing.suggestedCc` (not sent automatically); default and label CC applied automatically *(Automatic CC removed in Batch 5.9)*
 - [x] 5.7.5 API endpoints: draft PATCH accepts `to, cc, bcc, subject, body`; send, update-draft and manual-send pass them through; reconcile reads CC and BCC from Gmail drafts
 - [x] 5.7.6 Frontend: reply editor shows To, Cc, Bcc (Cc/Bcc collapsed), email chips with validation & multi-address paste, "Add reply-all recipients", and sent-turn CC display
-- [x] 5.7.7 Frontend: Failed compose box includes To, Cc, Bcc, and "Add reply-all recipients"; Profile & Rules includes default CC; label form includes always CC
+- [x] 5.7.7 Frontend: Failed compose box includes To, Cc, Bcc, and "Add reply-all recipients" *(default CC and always CC removed in Batch 5.9)*
 - [x] 5.7.8 Comprehensive tests for headers, own-address removal, invalid address rejection, header injection, chips validation, and CC application in `server/tests/cc-bcc.test.js`
 
 ### Batch 5.8 – AI-Assisted Drafting
@@ -1185,6 +1240,19 @@ These tests must pass before marking the fix plan complete.
 - [x] 5.8.10 Add comprehensive unit tests in `server/tests/email-body.test.js` covering normalizeParagraphs, abbreviations, revise framing, MIME decoded parts, and frontend line-break preservation
 - [x] 5.8.11 Draft editor single source of truth (`useDraftEditor.js`), unified Save (auto-accepts preview, aborts in-flight AI, handles no changes, sets version source "ai_revision"/"restore"/"manual_edit"), unified Cancel (dirty discard confirmation prompt), and scoped errors per draft
 - [x] 5.8.12 Save-first sync-second architecture (`PATCH /email-actions/:id` saves to MongoDB first, returns non-blocking `gmailSync` status, handles 404 sent check vs missing recreation, optimistic concurrency 409 conflict, `POST /email-actions/:id/retry-gmail-sync`, and `server/tests/draft-editor-sync.test.js`)
+
+### Batch 5.9 – Routing Rules redesign and Always-CC removal
+- [x] 5.9.1 Remove `alwaysCc` from `User.labels` and `defaultCc` from `User.settings` in `server/models/User.js`
+- [x] 5.9.2 Remove `alwaysCc` from label creation/patching and `defaultCc` from profile settings route
+- [x] 5.9.3 Update `poll.job.js` to eliminate automatic CC (`appliedCc = []`); keep incoming recipient suggestions in `suggestedCc`
+- [x] 5.9.4 Create idempotent database cleanup tool `server/tools/remove-always-cc.js` with `--dry-run`, `arrayFilters`, and `updateMany`
+- [x] 5.9.5 Remove Default CC input from `AccountPanel.jsx` and Always CC from label forms/tables
+- [x] 5.9.6 Create `ruleLogic.js` with name validation (1-40 chars, case-insensitive uniqueness, trimmed), grounding defaults, inline warnings, and optimistic state manager
+- [x] 5.9.7 Create `RuleDrawer.jsx` side drawer for Add/Edit with 5 logical groups, action none smart disabling, grounding rules, inline non-blocking warnings, and focus trap
+- [x] 5.9.8 Create `DeleteRuleDialog.jsx` confirmation modal with accurate Gmail label/email behavior and disabled deleting state
+- [x] 5.9.9 Redesign `LabelTable.jsx` with 7 desktop columns (colour dot + name, Action select, Grounding badge, Knowledge base chips + overflow, Persona, Status toggle, Actions), mobile cards, loading skeleton, and empty state
+- [x] 5.9.10 Implement table inline quick edits (Action select, Status toggle) with saving indicator, toast feedback, and error rollback
+- [x] 5.9.11 Comprehensive tests in `server/tests/routing-rules-redesign.test.js` and updated `server/tests/cc-bcc.test.js`
 
 ### Batch 6 – MIME / Formatting
 - [x] 6.1 76-char base64 wrapping

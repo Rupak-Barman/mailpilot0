@@ -113,21 +113,6 @@ router.patch("/settings", auth, async (req, res) => {
       if (typeof req.body.settings.groupBySender === "boolean") {
         user.settings.groupBySender = req.body.settings.groupBySender;
       }
-      if (req.body.settings.defaultCc !== undefined) {
-        const rawCc = req.body.settings.defaultCc;
-        const list = Array.isArray(rawCc)
-          ? rawCc
-          : typeof rawCc === "string"
-          ? rawCc.split(/[,;]/)
-          : [];
-        user.settings.defaultCc = [
-          ...new Set(
-            list
-              .map((e) => String(e || "").replace(/[\r\n]+/g, "").trim())
-              .filter(Boolean)
-          )
-        ];
-      }
       await user.save();
     }
 

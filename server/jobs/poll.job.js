@@ -714,28 +714,8 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
       }
       const suggestedCc = Array.from(suggestedCcMap.values()).slice(0, 20);
 
-      // Default and label CC
-      const defaultCcList = user.settings?.defaultCc || [];
-      const labelAlwaysCcList = labelObj?.alwaysCc || [];
-      const configuredCcStrings = [...defaultCcList, ...labelAlwaysCcList];
-      const configuredCcRecipients = [];
-      const configuredCcSeen = new Set();
-      for (const entry of parseRecipientList(configuredCcStrings)) {
-        const emailLower = entry.email.toLowerCase();
-        if (
-          emailLower &&
-          emailLower !== userEmailLower &&
-          !configuredCcSeen.has(emailLower) &&
-          isValidEmail(entry.email)
-        ) {
-          configuredCcSeen.add(emailLower);
-          configuredCcRecipients.push({
-            name: entry.name || "",
-            email: entry.email
-          });
-        }
-      }
-      const appliedCc = configuredCcRecipients.slice(0, 20);
+      // Nothing is ever CC'd automatically; CC must be explicitly added by the user
+      const appliedCc = [];
       const appliedTo = senderRecipient
         ? [senderRecipient]
         : [{ name: "", email: newestFrom }];

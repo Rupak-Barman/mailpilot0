@@ -283,29 +283,30 @@ describe("BATCH 5.7: CC and BCC", () => {
       assert.equal(turnOutgoing.suggestedCc[0].email, "other@example.com");
     });
 
-    it("User schema supports defaultCc and label alwaysCc", () => {
+    it("User schema does not support defaultCc or label alwaysCc (Batch 5.9 removal)", () => {
       const user = new User({
         email: "user@example.com",
         settings: {
+          groupBySender: true,
           defaultCc: ["assistant@example.com", "archive@example.com"]
         },
         labels: [
           {
             name: "Finance",
+            color: "#3b82f6",
             alwaysCc: ["cfo@example.com"]
           }
         ]
       });
 
-      assert.deepEqual(user.settings.defaultCc, [
-        "assistant@example.com",
-        "archive@example.com"
-      ]);
-      assert.deepEqual(user.labels[0].alwaysCc, ["cfo@example.com"]);
+      // defaultCc and alwaysCc are ignored and omitted by the schema
+      assert.equal(user.settings.defaultCc, undefined);
+      assert.equal(user.labels[0].alwaysCc, undefined);
+      assert.equal(user.labels[0].color, "#3b82f6");
     });
   });
 
-  describe("7. Default & Label CC application and suggestedCc logic", () => {
+  describe("7. SuggestedCc logic & No automatic CC (Batch 5.9)", () => {
     it("suggestedCc extracts other incoming recipients excluding sender and user", () => {
       const userEmail = "me@example.com";
       const senderFrom = "Alice Sender <alice@example.com>";
@@ -338,36 +339,60 @@ describe("BATCH 5.7: CC and BCC", () => {
       );
     });
 
-    it("applies default CC and label always CC while removing user address and deduplicating", () => {
-      const userEmail = "me@example.com";
-      const defaultCc = ["assistant@example.com", "me@example.com", "team@example.com"];
-      const labelAlwaysCc = ["team@example.com", "cfo@example.com"];
+    it("generated draft and auto reply have an empty cc by default (nothing is CC'd automatically)", () => {
+      // Incoming email with multiple other recipients
+      const incomingTo = "user@example.com, other1@example.com";
+      const incomingCc = "other2@example.com";
+      const userEmail = "user@example.com";
+      const senderFrom = "client@example.com";
 
-      const configuredCcStrings = [...defaultCc, ...labelAlwaysCc];
-      const configuredCcRecipients = [];
-      const configuredCcSeen = new Set();
+      const allIncoming = [
+        ...parseRecipientList(incomingTo),
+        ...parseRecipientList(incomingCc)
+      ];
+      const senderRecipient = parseRecipient(senderFrom);
+      const senderEmailLower = senderRecipient.email.toLowerCase();
       const userEmailLower = userEmail.toLowerCase();
 
-      for (const entry of parseRecipientList(configuredCcStrings)) {
-        const el = entry.email.toLowerCase();
-        if (
-          el &&
-          el !== userEmailLower &&
-          !configuredCcSeen.has(el) &&
-          isValidEmail(entry.email)
-        ) {
-          configuredCcSeen.add(el);
-          configuredCcRecipients.push({
-            name: entry.name || "",
-            email: entry.email
-          });
+      const suggestedMap = new Map();
+      for (const r of allIncoming) {
+        const el = r.email.toLowerCase();
+        if (el && el !== senderEmailLower && el !== userEmailLower) {
+          if (!suggestedMap.has(el)) {
+            suggestedMap.set(el, { name: r.name || "", email: r.email });
+          }
         }
       }
+      const suggestedCc = Array.from(suggestedMap.values()).slice(0, 20);
 
-      assert.equal(configuredCcRecipients.length, 3);
+      // Verify rule: appliedCc is ALWAYS empty
+      const appliedCc = [];
+      const appliedTo = [senderRecipient];
+      const appliedBcc = [];
+
+      assert.equal(appliedCc.length, 0);
+      assert.deepEqual(appliedCc, []);
+
+      // Building MIME with empty CC produces no CC header
+      const raw = buildMimeMessage({
+        to: appliedTo,
+        cc: appliedCc,
+        bcc: appliedBcc,
+        subject: "Re: Inquiry",
+        body: "Thank you for reaching out.",
+        userEmail
+      });
+
+      const decoded = Buffer.from(raw, "base64url").toString("utf8");
+      assert.match(decoded, /^To: client@example\.com$/m);
+      assert.doesNotMatch(decoded, /^Cc:/m);
+      assert.doesNotMatch(decoded, /^Bcc:/m);
+
+      // Suggested recipients exist for manual user addition only
+      assert.equal(suggestedCc.length, 2);
       assert.deepEqual(
-        configuredCcRecipients.map((c) => c.email),
-        ["assistant@example.com", "team@example.com", "cfo@example.com"]
+        suggestedCc.map((r) => r.email),
+        ["other1@example.com", "other2@example.com"]
       );
     });
   });

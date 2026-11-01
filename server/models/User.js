@@ -70,10 +70,6 @@ const UserSchema = new mongoose.Schema({
     groupBySender: {
       type: Boolean,
       default: false
-    },
-    defaultCc: {
-      type: [String],
-      default: []
     }
   },
 
@@ -125,17 +121,17 @@ const UserSchema = new mongoose.Schema({
         default: []
       },
 
-      alwaysCc: {
-        type: [String],
-        default: []
-      },
-
       grounding: {
         type: String,
         enum: ["strict", "flexible"],
         default: function () {
           return this.knowledgeDocumentIds?.length > 0 ? "strict" : "flexible";
         }
+      },
+
+      color: {
+        type: String,
+        default: ""
       }
     }
   ]

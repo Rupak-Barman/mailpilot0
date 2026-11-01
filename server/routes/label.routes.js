@@ -99,10 +99,11 @@ router.post("/", auth, async (req, res) => {
       personaId = "",
       knowledgeDocumentIds = [],
       grounding,
-      alwaysCc = []
+      color = ""
     } = req.body;
 
     const cleanName = String(name || "").trim();
+    const cleanColor = typeof color === "string" ? color.trim() : "";
 
     const cleanTone = [
       "formal",
@@ -128,9 +129,9 @@ router.post("/", auth, async (req, res) => {
     const cleanEnabled =
       typeof enabled === "boolean" ? enabled : true;
 
-    if (!cleanName) {
+    if (!cleanName || cleanName.length > 40) {
       return res.status(400).json({
-        message: "Label name is required."
+        message: "Label name is required and must be between 1 and 40 characters."
       });
     }
 
@@ -168,25 +169,6 @@ router.post("/", auth, async (req, res) => {
       ? grounding
       : (cleanKnowledgeIds.length > 0 ? "strict" : "flexible");
 
-    const cleanAlwaysCc = Array.isArray(alwaysCc)
-      ? [
-          ...new Set(
-            alwaysCc
-              .map((e) => String(e || "").replace(/[\r\n]+/g, "").trim())
-              .filter(Boolean)
-          )
-        ]
-      : typeof alwaysCc === "string"
-      ? [
-          ...new Set(
-            alwaysCc
-              .split(/[,;]/)
-              .map((e) => e.replace(/[\r\n]+/g, "").trim())
-              .filter(Boolean)
-          )
-        ]
-      : [];
-
     const existing = user.labels.find(
       (label) =>
         label.name.toLowerCase() === cleanName.toLowerCase()
@@ -201,7 +183,9 @@ router.post("/", auth, async (req, res) => {
       existing.personaId = cleanPersonaId;
       existing.knowledgeDocumentIds = cleanKnowledgeIds;
       existing.grounding = cleanGrounding;
-      existing.alwaysCc = cleanAlwaysCc;
+      if (cleanColor) {
+        existing.color = cleanColor;
+      }
 
       await user.save();
 
@@ -228,7 +212,7 @@ router.post("/", auth, async (req, res) => {
       personaId: cleanPersonaId,
       knowledgeDocumentIds: cleanKnowledgeIds,
       grounding: cleanGrounding,
-      alwaysCc: cleanAlwaysCc
+      color: cleanColor
     };
 
     user.labels.push(newLabel);
@@ -252,14 +236,15 @@ router.post("/", auth, async (req, res) => {
 router.patch("/:labelId", auth, async (req, res) => {
   try {
     const {
+      name,
+      color,
       action,
       tone,
       markAsRead,
       enabled,
       personaId,
       knowledgeDocumentIds,
-      grounding,
-      alwaysCc
+      grounding
     } = req.body;
 
     const user = await User.findById(req.user.id);
@@ -276,6 +261,48 @@ router.patch("/:labelId", auth, async (req, res) => {
       return res.status(404).json({
         message: "Label not found."
       });
+    }
+
+    if (name !== undefined) {
+      const cleanName = String(name || "").trim();
+      if (!cleanName || cleanName.length > 40) {
+        return res.status(400).json({
+          message: "Label name is required and must be between 1 and 40 characters."
+        });
+      }
+
+      const duplicate = user.labels.find(
+        (l) =>
+          String(l._id) !== String(label._id) &&
+          l.id !== label.id &&
+          l.name.toLowerCase() === cleanName.toLowerCase()
+      );
+
+      if (duplicate) {
+        return res.status(400).json({
+          message: "A routing rule with this name already exists."
+        });
+      }
+
+      if (cleanName !== label.name) {
+        if (label.id && user.refreshToken) {
+          try {
+            const gmail = await getGmail(user);
+            await gmail.users.labels.patch({
+              userId: "me",
+              id: label.id,
+              requestBody: { name: cleanName }
+            });
+          } catch (gmailErr) {
+            console.warn("Gmail label name update failed:", gmailErr.message);
+          }
+        }
+        label.name = cleanName;
+      }
+    }
+
+    if (color !== undefined) {
+      label.color = String(color || "").trim();
     }
 
     if (tone !== undefined) {
@@ -347,27 +374,6 @@ router.patch("/:labelId", auth, async (req, res) => {
       label.grounding = grounding;
     } else if (knowledgeDocumentIds !== undefined && grounding === undefined) {
       label.grounding = (label.knowledgeDocumentIds?.length || 0) > 0 ? "strict" : "flexible";
-    }
-
-    if (alwaysCc !== undefined) {
-      label.alwaysCc = Array.isArray(alwaysCc)
-        ? [
-            ...new Set(
-              alwaysCc
-                .map((e) => String(e || "").replace(/[\r\n]+/g, "").trim())
-                .filter(Boolean)
-            )
-          ]
-        : typeof alwaysCc === "string"
-        ? [
-            ...new Set(
-              alwaysCc
-                .split(/[,;]/)
-                .map((e) => e.replace(/[\r\n]+/g, "").trim())
-                .filter(Boolean)
-            )
-          ]
-        : [];
     }
 
     await user.save();
