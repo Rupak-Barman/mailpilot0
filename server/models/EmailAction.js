@@ -1,65 +1,148 @@
 import mongoose from "mongoose";
 
-const ConversationItemSchema = new mongoose.Schema({
-  role: {
-    type: String,
-    enum: ["incoming", "outgoing"],
-    required: true
-  },
-  type: {
-    type: String, // "summary" for incoming email, "reply" or "draft" for outgoing
-    default: "summary"
-  },
-  content: {
-    type: String,
-    required: true
-  },
-  messageId: String,
-  timestamp: {
-    type: Date,
-    default: Date.now
-  }
-}, { _id: false });
-
-const EmailActionSchema = new mongoose.Schema({
-  userId: { type: String, required: true, index: true },
-  sourceMessageId: { type: String, required: true },
-  gmailMessageId: String,
-  gmailDraftId: String,
-  threadId: { type: String, index: true },
-  type: {
-    type: String,
-    enum: ["reply", "draft"],
-    required: true
-  },
-  label: String,
-  to: String,
-  subject: String,
-  summary: { type: String, default: "" },
-  body: String,
-  conversationHistory: {
-    type: [ConversationItemSchema],
-    default: []
-  },
-  checked: { type: Boolean, default: false },
-  checkedAt: Date,
-
-  status: {
-    type: String,
-    enum: ["draft", "sending", "sent", "send_failed"],
-    default: function () {
-      return this.type === "reply" ? "sent" : "draft";
+const ConversationItemSchema = new mongoose.Schema(
+  {
+    role: {
+      type: String,
+      enum: ["incoming", "outgoing"],
+      required: true
+    },
+    type: {
+      type: String, // "summary" for incoming email, "reply" or "draft" for outgoing
+      default: "summary"
+    },
+    content: {
+      type: String,
+      required: true
+    },
+    messageId: String,
+    timestamp: {
+      type: Date,
+      default: Date.now
     }
   },
-  sentAt: Date
-
-}, { timestamps: true });
-
-EmailActionSchema.index(
-  { userId: 1, sourceMessageId: 1, type: 1 },
-  { unique: true }
+  { _id: false }
 );
 
-EmailActionSchema.index({ userId: 1, threadId: 1 });
+const OutgoingTurnSchema = new mongoose.Schema(
+  {
+    kind: {
+      type: String,
+      enum: ["draft", "reply"]
+    },
+    body: String, // plain text
+    bodyHtml: String, // HTML version
+    status: {
+      type: String,
+      // B6: includes "sending" and "superseded"
+      enum: ["draft", "sending", "sent", "superseded", "deleted", "failed"]
+    },
+    gmailDraftId: String,
+    gmailMessageId: String,
+    sentAt: Date,
+    composedManually: {
+      type: Boolean,
+      default: false
+    },
+    inReplyTo: String,
+    references: String
+  },
+  { _id: false }
+);
 
-export default mongoose.models.EmailAction || mongoose.model("EmailAction", EmailActionSchema);
+const TurnSchema = new mongoose.Schema(
+  {
+    // Incoming side
+    incomingMessageId: String,
+    from: String, // real sender display name + address
+    receivedAt: Date,
+    incomingSubject: String,
+    incomingSnippet: String,
+    incomingSummary: String, // AI-generated
+    label: String,
+
+    // Outcome
+    outcome: {
+      type: String,
+      enum: ["labeled", "drafted", "sent", "none", "failed", "needs_manual"]
+    },
+    failureReason: String,
+
+    // Outgoing side (only present for draft/sent turns)
+    outgoing: OutgoingTurnSchema
+  },
+  { _id: false }
+);
+
+const EmailActionSchema = new mongoose.Schema(
+  {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+    threadId: {
+      type: String,
+      required: true
+    },
+
+    // Convenience top-level fields derived from latest turn
+    // (NO origin field - tabs/badges derive from latest turn's outgoing.kind/status)
+    status: {
+      type: String,
+      enum: [
+        "unread",
+        "draft",
+        "sending",
+        "sent",
+        "needs_reply",
+        "failed",
+        "reviewed",
+        "send_failed"
+      ]
+    },
+    label: String,
+    checked: {
+      type: Boolean,
+      default: false
+    },
+    type: {
+      type: String,
+      enum: ["draft", "reply", "none", "failed"]
+    },
+
+    turns: {
+      type: [TurnSchema],
+      default: []
+    },
+
+    // Legacy fields preserved so existing documents still load
+    sourceMessageId: String,
+    gmailMessageId: String,
+    gmailDraftId: String,
+    to: String,
+    subject: String,
+    summary: {
+      type: String,
+      default: ""
+    },
+    body: String,
+    conversationHistory: {
+      type: [ConversationItemSchema],
+      default: []
+    },
+    checkedAt: Date,
+    sentAt: Date
+  },
+  {
+    timestamps: true,
+    autoIndex: false
+  }
+);
+
+if (mongoose.models.EmailAction) {
+  delete mongoose.models.EmailAction;
+}
+
+export default mongoose.model("EmailAction", EmailActionSchema);
+
