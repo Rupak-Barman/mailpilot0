@@ -15,6 +15,7 @@ import {
   updateEmailActionLabel,
   manualSendEmailAction,
   tryAiDraftAction,
+  retryGmailSyncAction,
 } from "../api/emailActions.api";
 
 export const useEmailActions = (params) =>
@@ -130,6 +131,18 @@ export const useTryAiDraftAction = () => {
 
   return useMutation({
     mutationFn: tryAiDraftAction,
+
+    onSuccess: () => {
+      invalidateEmailActionQueries(queryClient);
+    },
+  });
+};
+
+export const useRetryGmailSyncAction = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: retryGmailSyncAction,
 
     onSuccess: () => {
       invalidateEmailActionQueries(queryClient);

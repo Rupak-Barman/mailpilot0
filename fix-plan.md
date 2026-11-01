@@ -729,6 +729,35 @@ Sample tested:
 
 ---
 
+### Investigation: AI Assist Draft Editor Save/Cancel & Gmail Draft Update Issues
+
+#### 1. Investigation Findings Table
+
+| Area Investigated | Symptom / Problem | Root Cause Found |
+|---|---|---|
+| **Save in Preview State** | Clicking Save Changes while AI preview is active fails to save preview metadata or clear banner. | `handleSave` in `EmailActionDetail.jsx` did not inspect `previewDraft`. It dispatched a raw update with only `{ to, cc, bcc, subject, body }` without `generation` metadata, version history, or clearing `previewDraft`. Users were forced to click "Use this" first. |
+| **Save in Restored State** | Restoring a version from "Versions" menu and clicking Save failed to record version source as `"restore"`. | `handleRestoreVersion` simply set `form.body` without tracking the origin of the edit, falling back to a generic edit or ignoring unchanged text. |
+| **Cancel Behavior** | Clicking Cancel did not discard active AI preview; footer Cancel corrupted recipient state. | Neither inline nor footer Cancel cleared `previewDraft`. Furthermore, footer Cancel set `to: item.to || ""` as a plain string instead of an array of recipient objects `[{ name, email }]`, corrupting recipient chip inputs. |
+| **Silent Failures on Save** | Clicking Save Changes appeared to do nothing with no message. | `handleUpdateDraft` in `DraftReplyLogPage.jsx` had no `onError` callback. When the server returned an error (e.g. 502/404), `onSuccess` never fired, the button spinner stopped, and the error banner was positioned at the very bottom of the detail panel (off-screen below the scroll fold). |
+| **Shared Error Across Drafts** | `"Could not update the Gmail draft"` displayed persistently across all drafts. | `updateDraft` is a React Query `useMutation` at the page level in `DraftReplyLogPage.jsx`. Once `updateDraft.error` was set, it was never reset when switching drafts, closing the modal, or editing fields. The prop was passed down into `EmailActionDetail` regardless of which draft was selected. |
+| **Server Update Draft Failure** | Updating drafts failed with 502/404, discarding unsaved user edits. | `handleUpdateDraft` in `server/routes/emailAction.routes.js` called `updateGmailDraft` **BEFORE** saving to MongoDB (`await action.save()`). Any Gmail issue (stale draft ID, deleted/sent in Gmail, or transient network) rejected the whole request before the user's text was saved. Furthermore, the 404 handler referenced `gmail` out of its scope. |
+
+#### 2. Architecture for Fix
+1. **Single Source of Truth (`useDraftEditor.js`):** Unified reducer/hook managing `{ body, subject, to, cc, bcc, baseVersionId, dirty, pendingPreview, source, syncError, conflict }`. All inputs (typing, AI preview, restore, undo) write to this state and set `dirty: true`.
+2. **Unified Save Handler:** Both inline and footer Save buttons invoke the exact same handler. Automatically accepts pending AI preview (records generation metadata and version source `"ai_revision"`). Handles restored version source (`"restore"`) and manual edits (`"manual_edit"`). Aborts in-flight AI requests. Displays `"No changes to save"` if not dirty.
+3. **Save-First, Sync-Second Architecture:**
+   - Server writes to MongoDB first and guarantees draft text is persisted.
+   - Syncs to Gmail in same request:
+     - On 404: checks thread for SENT message. If found, marks sent from Gmail (`"This draft was already sent from Gmail"`). If not found, recreates the draft in the turn's `gmailThreadId` (`"The Gmail draft was missing and has been recreated"`).
+     - On other Gmail failure: retains saved text, sets `outgoing.gmailSync = { state: "failed", reason, at }`, and returns 200 with `gmailSync` details (never 500/502).
+   - `POST /email-actions/:id/retry-gmail-sync` endpoint for manual and reconcile background retry.
+   - Optimistic concurrency: verifies `baseVersionId`; returns 409 conflict with Reload/Overwrite choices if changed elsewhere.
+4. **Unified Cancel Handler:** Prompts user to confirm discarding unsaved changes if `dirty`. Discards pending preview and restores last saved text.
+5. **Scoped Errors & Status Indicators:** Errors scoped per turnId and cleared on edit/save/retry. Status line indicates sync state with retry action.
+
+
+---
+
 ## Batch 6 – Email MIME / Formatting Fixes
 
 ### Issues fixed
@@ -1164,6 +1193,8 @@ These tests must pass before marking the fix plan complete.
 - [x] 5.8.8 Write comprehensive mocked tests in `server/tests/ai-assist.test.js` covering all 10 requirements and update analytics tests
 - [x] 5.8.9 Fix AI draft paragraph formatting and model framing (`server/utils/emailBody.js`, prompt JSON `{"paragraphs": [...]}`, normalizeParagraphs sentence splitting & abbreviation protection, shared with Batch 3 auto-generation and AI assist)
 - [x] 5.8.10 Add comprehensive unit tests in `server/tests/email-body.test.js` covering normalizeParagraphs, abbreviations, revise framing, MIME decoded parts, and frontend line-break preservation
+- [x] 5.8.11 Draft editor single source of truth (`useDraftEditor.js`), unified Save (auto-accepts preview, aborts in-flight AI, handles no changes, sets version source "ai_revision"/"restore"/"manual_edit"), unified Cancel (dirty discard confirmation prompt), and scoped errors per draft
+- [x] 5.8.12 Save-first sync-second architecture (`PATCH /email-actions/:id` saves to MongoDB first, returns non-blocking `gmailSync` status, handles 404 sent check vs missing recreation, optimistic concurrency 409 conflict, `POST /email-actions/:id/retry-gmail-sync`, and `server/tests/draft-editor-sync.test.js`)
 
 ### Batch 6 – MIME / Formatting
 - [x] 6.1 76-char base64 wrapping

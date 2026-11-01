@@ -101,6 +101,16 @@ export const DraftReplyLogPage = () => {
     }
   }, [actions.data?.total]);
 
+  // Reset action mutations whenever the selected item changes so errors are never shared across drafts
+  useEffect(() => {
+    updateDraft.reset();
+    sendAction.reset();
+    deleteDraft.reset();
+    updateLabel.reset();
+    manualSendAction.reset();
+    tryAiDraftAction.reset();
+  }, [selected?._id]);
+
   const handleManualSend = (payload, callbacks) => {
     manualSendAction.mutate(payload, {
       onSuccess: (result) => {
@@ -153,6 +163,9 @@ export const DraftReplyLogPage = () => {
       onSuccess: (result) => {
         setSelected(result.action);
         callbacks?.onSuccess?.(result);
+      },
+      onError: (err) => {
+        callbacks?.onError?.(err);
       },
     });
   };

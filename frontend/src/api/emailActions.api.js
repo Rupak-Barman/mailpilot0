@@ -39,12 +39,22 @@ export const updateEmailActionDraft = async ({
   bcc,
   subject,
   body,
+  baseVersionId,
+  forceOverwrite,
   generation,
   version,
 }) => {
   const { data } = await apiClient.patch(
     `/email-actions/${id}`,
-    { to, cc, bcc, subject, body, generation, version },
+    { to, cc, bcc, subject, body, baseVersionId, forceOverwrite, generation, version },
+  );
+
+  return data;
+};
+
+export const retryGmailSyncAction = async ({ id }) => {
+  const { data } = await apiClient.post(
+    `/email-actions/${id}/retry-gmail-sync`
   );
 
   return data;

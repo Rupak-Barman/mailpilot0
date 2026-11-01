@@ -20,6 +20,7 @@ import {
   FiClock,
   FiCheck,
   FiRefreshCw,
+  FiAlertCircle,
 } from "react-icons/fi";
 
 import { Button } from "../../components/common/Button";
@@ -31,6 +32,8 @@ import { AiAssistPanel } from "./AiAssistPanel";
 import { aiAssistAction } from "../../api/emailActions.api";
 import { useLabels } from "../../hooks/useLabels";
 import { useKnowledgeFiles } from "../../hooks/useKnowledge";
+import { useRetryGmailSyncAction } from "../../hooks/useEmailActions";
+import { useDraftEditor } from "./useDraftEditor";
 
 export const EmailActionDetail = ({
   item,
@@ -190,13 +193,10 @@ const EmailActionDetailContent = ({
     ? latestTurn.outgoing.bcc
     : parseRawRecipients(item.bcc || "");
 
-  const [form, setForm] = useState({
-    to: initialTo,
-    cc: initialCc,
-    bcc: initialBcc,
-    subject: item.subject || "",
-    body: latestTurn?.outgoing?.body || item.body || "",
-  });
+  const editor = useDraftEditor();
+  const retrySyncMutation = useRetryGmailSyncAction();
+  const [localSaveError, setLocalSaveError] = useState(null);
+
   const [showCc, setShowCc] = useState(() => initialCc.length > 0);
   const [showBcc, setShowBcc] = useState(() => initialBcc.length > 0);
 
@@ -226,7 +226,7 @@ const EmailActionDetailContent = ({
   const [aiAssistError, setAiAssistError] = useState(null);
   const [aiAssistNotice, setAiAssistNotice] = useState(null);
   const [assistPanelOpen, setAssistPanelOpen] = useState(false);
-  const [previewDraft, setPreviewDraft] = useState(null);
+  const [composePreviewDraft, setComposePreviewDraft] = useState(null);
   const [showVersionsMenu, setShowVersionsMenu] = useState(false);
   const assistAbortRef = useRef(null);
 
@@ -262,7 +262,10 @@ const EmailActionDetailContent = ({
       latestTurn?.outgoing?.kind === "draft" || item.type === "draft"
     );
     const mode = isRevise ? "revise" : "compose";
-    const currentBody = isRevise ? form.body : manualReplyText;
+    const currentBody = isRevise ? editor.state.body : manualReplyText;
+    const currentVersionId = isRevise
+      ? editor.state.pendingPreview?.versionId
+      : composePreviewDraft?.versionId;
 
     try {
       const turnId =
@@ -277,7 +280,7 @@ const EmailActionDetailContent = ({
         instruction,
         useKnowledge,
         currentBody,
-        versionId: previewDraft?.versionId,
+        versionId: currentVersionId,
         signal: abortController.signal,
       });
 
@@ -304,13 +307,12 @@ const EmailActionDetailContent = ({
         framing: res.framing,
       };
 
-      setPreviewDraft(previewObj);
-
       // Update editor text immediately with preview
       if (isRevise) {
-        setForm((prev) => ({ ...prev, body: res.body }));
+        editor.setAiPreview(previewObj);
         setIsEditing(true);
       } else {
+        setComposePreviewDraft(previewObj);
         setManualReplyText(res.body);
       }
     } catch (err) {
@@ -336,100 +338,74 @@ const EmailActionDetailContent = ({
     setIsAiAssisting(false);
   };
 
-  const handleUsePreview = () => {
-    if (!previewDraft) return;
-    const isRevise = previewDraft.mode === "revise";
+  const handleUseComposePreview = () => {
+    if (!composePreviewDraft) return;
+
+    let draftSubject = latestTurn?.incomingSubject || item.subject || "";
+    if (!draftSubject.toLowerCase().startsWith("re:")) {
+      draftSubject = `Re: ${draftSubject.replace(/^re:\s*/i, "")}`.trim();
+    }
 
     const generationPayload = {
       mode: "user_assisted",
-      instruction: previewDraft.instruction,
-      useKnowledge: previewDraft.usedKnowledge,
-      ungrounded: previewDraft.ungrounded,
-      sources: previewDraft.sources,
-      framing: previewDraft.framing,
+      instruction: composePreviewDraft.instruction,
+      useKnowledge: composePreviewDraft.usedKnowledge,
+      ungrounded: composePreviewDraft.ungrounded,
+      sources: composePreviewDraft.sources,
+      framing: composePreviewDraft.framing,
     };
 
     const versionPayload = {
-      versionId: previewDraft.versionId,
-      body: previewDraft.body,
-      source: isRevise ? "ai_revision" : "ai_initial",
-      instruction: previewDraft.instruction,
-      useKnowledge: previewDraft.usedKnowledge,
+      versionId: composePreviewDraft.versionId,
+      body: composePreviewDraft.body,
+      source: "ai_initial",
+      instruction: composePreviewDraft.instruction,
+      useKnowledge: composePreviewDraft.usedKnowledge,
     };
 
-    if (isRevise) {
-      onUpdateDraft(
-        {
-          id: item._id,
-          to: form.to,
-          cc: form.cc,
-          bcc: form.bcc,
-          subject: form.subject.trim(),
-          body: previewDraft.body,
-          generation: generationPayload,
-          version: versionPayload,
+    onUpdateDraft(
+      {
+        id: item._id,
+        to: manualTo,
+        cc: manualCc,
+        bcc: manualBcc,
+        subject: draftSubject,
+        body: composePreviewDraft.body,
+        generation: generationPayload,
+        version: versionPayload,
+      },
+      {
+        onSuccess: () => {
+          setComposePreviewDraft(null);
+          setAssistPanelOpen(false);
         },
-        {
-          onSuccess: () => {
-            setPreviewDraft(null);
-            setAssistPanelOpen(false);
-          },
-        }
-      );
-    } else {
-      let draftSubject = latestTurn?.incomingSubject || item.subject || "";
-      if (!draftSubject.toLowerCase().startsWith("re:")) {
-        draftSubject = `Re: ${draftSubject.replace(/^re:\s*/i, "")}`.trim();
       }
-
-      onUpdateDraft(
-        {
-          id: item._id,
-          to: manualTo,
-          cc: manualCc,
-          bcc: manualBcc,
-          subject: draftSubject,
-          body: previewDraft.body,
-          generation: generationPayload,
-          version: versionPayload,
-        },
-        {
-          onSuccess: () => {
-            setPreviewDraft(null);
-            setAssistPanelOpen(false);
-          },
-        }
-      );
-    }
+    );
   };
 
-  const handleDiscardPreview = () => {
-    if (!previewDraft) return;
-    if (previewDraft.mode === "revise") {
-      setForm((prev) => ({ ...prev, body: previewDraft.previousBody }));
-    } else {
-      setManualReplyText(previewDraft.previousBody);
-    }
-    setPreviewDraft(null);
+  const handleDiscardComposePreview = () => {
+    if (!composePreviewDraft) return;
+    setManualReplyText(composePreviewDraft.previousBody);
+    setComposePreviewDraft(null);
   };
 
   const handleReviseAgain = () => {
-    setPreviewDraft(null);
+    editor.discardPreview();
     setAssistPanelOpen(true);
   };
 
   const handleUndo = () => {
-    if (versions.length > 1) {
+    if (editor.state.pendingPreview) {
+      editor.discardPreview();
+    } else if (versions.length > 1) {
       const targetVersion = versions[versions.length - 2];
-      setForm((prev) => ({ ...prev, body: targetVersion.body }));
+      editor.undo(targetVersion);
       setIsEditing(true);
-    } else if (previewDraft) {
-      handleDiscardPreview();
     }
   };
 
   const handleRestoreVersion = (ver) => {
-    setForm((prev) => ({ ...prev, body: ver.body }));
+    editor.restoreVersion(ver);
     setIsEditing(true);
     setShowVersionsMenu(false);
   };
@@ -444,16 +420,17 @@ const EmailActionDetailContent = ({
     );
   };
 
-  const draftUnaddedSuggested = getUnaddedSuggested(form.to, form.cc);
+  const draftUnaddedSuggested = getUnaddedSuggested(
+    editor.state.to,
+    editor.state.cc
+  );
   const manualUnaddedSuggested = getUnaddedSuggested(manualTo, manualCc);
 
   const handleAddReplyAllToDraft = () => {
     if (draftUnaddedSuggested.length === 0) return;
-    setForm((current) => ({
-      ...current,
-      cc: [...current.cc, ...draftUnaddedSuggested],
-    }));
+    editor.updateField("cc", [...editor.state.cc, ...draftUnaddedSuggested]);
     setShowCc(true);
+    setLocalSaveError(null);
   };
 
   const handleAddReplyAllToManual = () => {
@@ -479,13 +456,22 @@ const EmailActionDetailContent = ({
       ? latestTurn.outgoing.bcc
       : parseRawRecipients(item.bcc || "");
 
-    setForm({
+    const baseVersionId =
+      latestTurn?.outgoing?.versions?.[latestTurn.outgoing.versions.length - 1]
+        ?.versionId ||
+      latestTurn?.versionId ||
+      null;
+
+    editor.init({
       to: nextTo,
       cc: nextCc,
       bcc: nextBcc,
       subject: item.subject || "",
       body: latestTurn?.outgoing?.body || item.body || "",
+      baseVersionId,
+      syncStatus: latestTurn?.outgoing?.gmailSync || null,
     });
+
     setShowCc(nextCc.length > 0);
     setShowBcc(nextBcc.length > 0);
 
@@ -497,7 +483,18 @@ const EmailActionDetailContent = ({
     setIsEditingLabel(false);
     setIsEditing(false);
     setExpandedTurnIndices(new Set([latestIndex]));
-  }, [item._id, item.to, item.subject, item.body, item.label, latestIndex]);
+    setLocalSaveError(null);
+    setComposePreviewDraft(null);
+  }, [
+    item._id,
+    item.to,
+    item.subject,
+    item.body,
+    item.label,
+    latestIndex,
+    latestTurn?.outgoing?.body,
+    latestTurn?.versionId,
+  ]);
 
   // Scroll to latest turn on open or item change
   useEffect(() => {
@@ -545,7 +542,8 @@ const EmailActionDetailContent = ({
     isUpdatingLabel ||
     isSendingNow ||
     isManualSending ||
-    isTryingAiDraft;
+    isTryingAiDraft ||
+    isAiAssisting;
 
   const handleManualSend = () => {
     if (!manualReplyText.trim()) {
@@ -590,36 +588,164 @@ const EmailActionDetailContent = ({
 
   const handleFieldChange = (event) => {
     const { name, value } = event.target;
-    setForm((current) => ({
-      ...current,
-      [name]: value,
-    }));
+    editor.updateField(name, value);
+    setLocalSaveError(null);
   };
 
   // Save draft changes (operates on latest turn's draft)
-  const handleSave = () => {
-    if (!form.to || form.to.length === 0) {
+  const handleSave = (options = {}) => {
+    const { forceOverwrite = false } = options;
+
+    if (assistAbortRef.current) {
+      assistAbortRef.current.abort();
+      assistAbortRef.current = null;
+      setIsAiAssisting(false);
+    }
+
+    if (!editor.state.to || editor.state.to.length === 0) {
       window.alert("Please enter a recipient email address.");
       return;
     }
 
-    if (!form.subject.trim()) {
+    if (!editor.state.subject.trim()) {
       window.alert("Please enter a subject.");
       return;
+    }
+
+    if (!editor.state.dirty && !editor.state.pendingPreview && !forceOverwrite) {
+      editor.setNotice("No changes to save");
+      setIsEditing(false);
+      return;
+    }
+
+    setLocalSaveError(null);
+
+    const bodyToSave = editor.state.body;
+    let generationPayload = undefined;
+    let versionPayload = undefined;
+
+    if (editor.state.pendingPreview) {
+      generationPayload = {
+        mode: "user_assisted",
+        instruction: editor.state.pendingPreview.instruction,
+        useKnowledge: editor.state.pendingPreview.usedKnowledge,
+        ungrounded: editor.state.pendingPreview.ungrounded,
+        sources: editor.state.pendingPreview.sources,
+        framing: editor.state.pendingPreview.framing,
+      };
+      versionPayload = {
+        versionId: editor.state.pendingPreview.versionId,
+        body: bodyToSave,
+        source: "ai_revision",
+        instruction: editor.state.pendingPreview.instruction,
+        useKnowledge: editor.state.pendingPreview.usedKnowledge,
+      };
+    } else if (editor.state.source === "restore") {
+      versionPayload = {
+        body: bodyToSave,
+        source: "restore",
+      };
+    } else if (bodyToSave !== editor.state.initialDraft.body) {
+      versionPayload = {
+        body: bodyToSave,
+        source: "manual_edit",
+      };
     }
 
     onUpdateDraft(
       {
         id: item._id,
-        to: form.to,
-        cc: form.cc,
-        bcc: form.bcc,
-        subject: form.subject.trim(),
-        body: form.body,
+        to: editor.state.to,
+        cc: editor.state.cc,
+        bcc: editor.state.bcc,
+        subject: editor.state.subject.trim(),
+        body: bodyToSave,
+        baseVersionId: editor.state.baseVersionId,
+        forceOverwrite,
+        generation: generationPayload,
+        version: versionPayload,
       },
       {
-        onSuccess: () => {
+        onSuccess: (result) => {
           setIsEditing(false);
+          const newVersionId =
+            result.action?.turns?.[latestIndex]?.versionId ||
+            result.action?.turns?.[latestIndex]?.outgoing?.versions?.slice(-1)[0]
+              ?.versionId;
+          const sync =
+            result.gmailSync ||
+            result.action?.turns?.[latestIndex]?.outgoing?.gmailSync;
+
+          let noticeText = "Draft saved";
+          if (sync?.state === "failed") {
+            noticeText = `Draft saved in app; Gmail sync pending (${
+              sync.reason || "sync failed"
+            })`;
+          } else if (result.warning) {
+            noticeText = result.warning;
+          }
+
+          editor.markSaved({
+            newVersionId,
+            syncStatus: sync,
+            notice: noticeText,
+          });
+        },
+        onError: (err) => {
+          if (err.response?.status === 409) {
+            editor.setConflict({
+              message:
+                err.response.data?.message ||
+                "This draft was modified elsewhere. Please reload or overwrite.",
+              serverBody: err.response.data?.currentBody,
+              serverSubject: err.response.data?.currentSubject,
+              currentVersionId: err.response.data?.currentVersionId,
+            });
+          } else {
+            setLocalSaveError(
+              err.response?.data?.message ||
+                err.message ||
+                "Could not update draft."
+            );
+          }
+        },
+      }
+    );
+  };
+
+  const handleCancel = () => {
+    if (editor.state.dirty || editor.state.pendingPreview) {
+      editor.setDiscardConfirm(true);
+    } else {
+      editor.discardChanges();
+      setIsEditing(false);
+    }
+  };
+
+  const handleConfirmDiscard = () => {
+    editor.discardChanges();
+    setIsEditing(false);
+  };
+
+  const handleKeepEditing = () => {
+    editor.setDiscardConfirm(false);
+  };
+
+  const handleRetrySync = () => {
+    setLocalSaveError(null);
+    retrySyncMutation.mutate(
+      { id: item._id },
+      {
+        onSuccess: (result) => {
+          editor.setSyncStatus(result.gmailSync || { state: "synced" });
+          editor.setNotice("Gmail draft updated successfully");
+        },
+        onError: (err) => {
+          const msg =
+            err.response?.data?.message ||
+            err.message ||
+            "Failed to sync with Gmail";
+          editor.setSyncStatus({ state: "failed", reason: msg, at: new Date() });
         },
       }
     );
@@ -705,19 +831,9 @@ const EmailActionDetailContent = ({
                 Subject
               </p>
 
-              {isEditing ? (
-                <input
-                  name="subject"
-                  value={form.subject}
-                  onChange={handleFieldChange}
-                  maxLength={998}
-                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                />
-              ) : (
-                <p className="mt-2 text-lg font-semibold text-slate-900 dark:text-slate-100">
-                  {item.subject || "No subject"}
-                </p>
-              )}
+              <p className="mt-2 text-lg font-semibold text-slate-900 dark:text-slate-100">
+                {isEditing ? editor.state.subject || "No subject" : item.subject || "No subject"}
+              </p>
             </div>
 
             {/* Recipient / Partner */}
@@ -725,22 +841,9 @@ const EmailActionDetailContent = ({
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
                 To / Participant
               </p>
-
-              {isEditing ? (
-                <input
-                  name="to"
-                  type="email"
-                  value={form.to}
-                  onChange={handleFieldChange}
-                  maxLength={1000}
-                  required
-                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                />
-              ) : (
-                <p className="mt-2 break-words text-slate-600 dark:text-slate-300">
-                  {item.to || "Unknown"}
-                </p>
-              )}
+              <p className="mt-2 break-words text-slate-600 dark:text-slate-300">
+                {item.to || "Unknown"}
+              </p>
             </div>
 
             {/* Category */}
@@ -1076,8 +1179,11 @@ const EmailActionDetailContent = ({
                                 </div>
                               </div>
                               <EmailChipInput
-                                value={form.to}
-                                onChange={(next) => setForm((c) => ({ ...c, to: next }))}
+                                value={editor.state.to}
+                                onChange={(next) => {
+                                  editor.updateField("to", next);
+                                  setLocalSaveError(null);
+                                }}
                                 placeholder="Enter recipient..."
                               />
                             </div>
@@ -1093,7 +1199,8 @@ const EmailActionDetailContent = ({
                                     type="button"
                                     onClick={() => {
                                       setShowCc(false);
-                                      setForm((c) => ({ ...c, cc: [] }));
+                                      editor.updateField("cc", []);
+                                      setLocalSaveError(null);
                                     }}
                                     className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
                                   >
@@ -1101,8 +1208,11 @@ const EmailActionDetailContent = ({
                                   </button>
                                 </div>
                                 <EmailChipInput
-                                  value={form.cc}
-                                  onChange={(next) => setForm((c) => ({ ...c, cc: next }))}
+                                  value={editor.state.cc}
+                                  onChange={(next) => {
+                                    editor.updateField("cc", next);
+                                    setLocalSaveError(null);
+                                  }}
                                   placeholder="Add CC recipient..."
                                 />
                               </div>
@@ -1119,7 +1229,8 @@ const EmailActionDetailContent = ({
                                     type="button"
                                     onClick={() => {
                                       setShowBcc(false);
-                                      setForm((c) => ({ ...c, bcc: [] }));
+                                      editor.updateField("bcc", []);
+                                      setLocalSaveError(null);
                                     }}
                                     className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
                                   >
@@ -1127,8 +1238,11 @@ const EmailActionDetailContent = ({
                                   </button>
                                 </div>
                                 <EmailChipInput
-                                  value={form.bcc}
-                                  onChange={(next) => setForm((c) => ({ ...c, bcc: next }))}
+                                  value={editor.state.bcc}
+                                  onChange={(next) => {
+                                    editor.updateField("bcc", next);
+                                    setLocalSaveError(null);
+                                  }}
                                   placeholder="Add BCC recipient..."
                                 />
                               </div>
@@ -1142,7 +1256,7 @@ const EmailActionDetailContent = ({
                               <input
                                 type="text"
                                 name="subject"
-                                value={form.subject}
+                                value={editor.state.subject}
                                 onChange={handleFieldChange}
                                 maxLength={998}
                                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800 outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-slate-200"
@@ -1150,7 +1264,7 @@ const EmailActionDetailContent = ({
                             </div>
 
                             {/* Preview Banner for Revise Mode */}
-                            {previewDraft && previewDraft.mode === "revise" && (
+                            {editor.state.pendingPreview && (
                               <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3 space-y-2 dark:border-indigo-800 dark:bg-indigo-950/40">
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                   <div className="flex flex-wrap items-center gap-1.5">
@@ -1158,29 +1272,34 @@ const EmailActionDetailContent = ({
                                       <FiCpu className="h-3 w-3" />
                                       AI Revision Preview
                                     </span>
-                                    {previewDraft.sources && previewDraft.sources.length > 0 && (
-                                      <span className="rounded-md bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-200">
-                                        Based on {previewDraft.sources.map((s) => s.docTitle).join(", ")} ({previewDraft.chunkCount} passages)
-                                      </span>
-                                    )}
+                                    {editor.state.pendingPreview.sources &&
+                                      editor.state.pendingPreview.sources.length > 0 && (
+                                        <span className="rounded-md bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-200">
+                                          Based on{" "}
+                                          {editor.state.pendingPreview.sources
+                                            .map((s) => s.docTitle)
+                                            .join(", ")}{" "}
+                                          ({editor.state.pendingPreview.chunkCount} passages)
+                                        </span>
+                                      )}
                                   </div>
 
                                   <div className="flex items-center gap-1.5">
                                     <Button
                                       size="sm"
                                       variant="success"
-                                      onClick={handleUsePreview}
-                                      disabled={isUpdatingDraft}
+                                      onClick={() => editor.acceptPreview()}
+                                      disabled={isBusy}
                                       className="bg-emerald-600 hover:bg-emerald-700 text-white"
                                     >
                                       <FiCheck className="h-3.5 w-3.5 mr-1" />
-                                      {isUpdatingDraft ? "Saving..." : "Use this"}
+                                      Use this
                                     </Button>
                                     <Button
                                       size="sm"
                                       variant="ghost"
-                                      onClick={handleDiscardPreview}
-                                      disabled={isUpdatingDraft}
+                                      onClick={() => editor.discardPreview()}
+                                      disabled={isBusy}
                                     >
                                       Discard
                                     </Button>
@@ -1188,7 +1307,7 @@ const EmailActionDetailContent = ({
                                       size="sm"
                                       variant="secondary"
                                       onClick={handleReviseAgain}
-                                      disabled={isUpdatingDraft}
+                                      disabled={isBusy}
                                     >
                                       <FiRefreshCw className="h-3 w-3 mr-1" />
                                       Revise again
@@ -1196,23 +1315,24 @@ const EmailActionDetailContent = ({
                                   </div>
                                 </div>
 
-                                {previewDraft.ungrounded && (
+                                {editor.state.pendingPreview.ungrounded && (
                                   <div className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
                                     <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
                                     <span>Ungrounded: check the facts</span>
                                   </div>
                                 )}
 
-                                {previewDraft.notices && previewDraft.notices.length > 0 && (
-                                  <div className="space-y-1 text-xs text-indigo-900 dark:text-indigo-200">
-                                    {previewDraft.notices.map((n, i) => (
-                                      <p key={i} className="flex items-center gap-1.5">
-                                        <span className="h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
-                                        {n}
-                                      </p>
-                                    ))}
-                                  </div>
-                                )}
+                                {editor.state.pendingPreview.notices &&
+                                  editor.state.pendingPreview.notices.length > 0 && (
+                                    <div className="space-y-1 text-xs text-indigo-900 dark:text-indigo-200">
+                                      {editor.state.pendingPreview.notices.map((n, i) => (
+                                        <p key={i} className="flex items-center gap-1.5">
+                                          <span className="h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
+                                          {n}
+                                        </p>
+                                      ))}
+                                    </div>
+                                  )}
                               </div>
                             )}
 
@@ -1223,7 +1343,7 @@ const EmailActionDetailContent = ({
                                   Message:
                                 </label>
                                 <div className="flex items-center gap-2">
-                                  {versions.length > 1 && (
+                                  {(versions.length > 1 || editor.state.pendingPreview) && (
                                     <button
                                       type="button"
                                       onClick={handleUndo}
@@ -1266,6 +1386,8 @@ const EmailActionDetailContent = ({
                                                         ? "Initial AI Draft"
                                                         : v.source === "ai_revision"
                                                         ? "AI Revision"
+                                                        : v.source === "restore"
+                                                        ? "Restored Version"
                                                         : "Manual Edit"}
                                                     </span>
                                                     <span className="text-[10px] text-slate-400">
@@ -1288,7 +1410,7 @@ const EmailActionDetailContent = ({
                               </div>
                               <textarea
                                 name="body"
-                                value={form.body}
+                                value={editor.state.body}
                                 onChange={handleFieldChange}
                                 rows={8}
                                 maxLength={100000}
@@ -1296,10 +1418,115 @@ const EmailActionDetailContent = ({
                               />
                             </div>
 
+                            {/* Inline Discard Confirmation Prompt */}
+                            {editor.state.showDiscardConfirm && (
+                              <div className="flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/50 dark:text-rose-200">
+                                <span>Discard changes? Unsaved edits will be lost.</span>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant="danger"
+                                    onClick={handleConfirmDiscard}
+                                    className="h-6 px-2 text-[11px]"
+                                  >
+                                    Discard
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={handleKeepEditing}
+                                    className="h-6 px-2 text-[11px]"
+                                  >
+                                    Keep editing
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Conflict Resolution Prompt (409) */}
+                            {editor.state.conflict && (
+                              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+                                <div className="flex items-start gap-2">
+                                  <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                  <div className="flex-1 space-y-1">
+                                    <p className="font-semibold">Conflict: Draft was updated elsewhere</p>
+                                    <p className="text-amber-800 dark:text-amber-300">
+                                      {editor.state.conflict.message}
+                                    </p>
+                                    <div className="flex items-center gap-2 pt-1">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => {
+                                          editor.clearConflict();
+                                          editor.discardChanges();
+                                          setIsEditing(false);
+                                        }}
+                                      >
+                                        Reload (Discard My Changes)
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="warning"
+                                        onClick={() => handleSave({ forceOverwrite: true })}
+                                        disabled={isBusy}
+                                      >
+                                        Overwrite
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Local Save Error */}
+                            {localSaveError && (
+                              <div className="rounded-md border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300">
+                                {localSaveError}
+                              </div>
+                            )}
+
+                            {/* Non-blocking Gmail sync failure status */}
+                            {editor.state.syncStatus?.state === "failed" && (
+                              <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
+                                <div className="flex items-center gap-1.5">
+                                  <FiAlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                  <span>
+                                    Saved in app. Gmail not updated:{" "}
+                                    <span className="font-medium">
+                                      {editor.state.syncStatus.reason ||
+                                        "Gmail draft synchronization failed"}
+                                    </span>
+                                  </span>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={handleRetrySync}
+                                  disabled={retrySyncMutation.isPending}
+                                  className="ml-2 shrink-0 h-6 px-2 text-[11px]"
+                                >
+                                  {retrySyncMutation.isPending ? "Retrying..." : "Retry sync"}
+                                </Button>
+                              </div>
+                            )}
+
+                            {/* Aria-live notification / feedback */}
+                            {editor.state.notice && (
+                              <div
+                                role="status"
+                                aria-live="polite"
+                                className="flex items-center gap-1.5 rounded-md bg-emerald-50 px-3 py-1.5 text-xs text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                              >
+                                <FiCheck className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                                <span>{editor.state.notice}</span>
+                              </div>
+                            )}
+
                             <div className="flex items-center gap-2 pt-1">
                               <Button
                                 variant="success"
-                                onClick={handleSave}
+                                onClick={() => handleSave()}
                                 disabled={isBusy}
                               >
                                 <FiSave className="h-3.5 w-3.5" />
@@ -1307,21 +1534,7 @@ const EmailActionDetailContent = ({
                               </Button>
                               <Button
                                 variant="ghost"
-                                onClick={() => {
-                                  setForm({
-                                    to: initialTo,
-                                    cc: initialCc,
-                                    bcc: initialBcc,
-                                    subject: item.subject || "",
-                                    body:
-                                      latestTurn?.outgoing?.body ||
-                                      item.body ||
-                                      "",
-                                  });
-                                  setShowCc(initialCc.length > 0);
-                                  setShowBcc(initialBcc.length > 0);
-                                  setIsEditing(false);
-                                }}
+                                onClick={handleCancel}
                                 disabled={isBusy}
                               >
                                 Cancel
@@ -1566,7 +1779,7 @@ const EmailActionDetailContent = ({
                               )}
 
                               {/* Preview Banner for Compose Mode */}
-                              {previewDraft && previewDraft.mode === "compose" && (
+                              {composePreviewDraft && composePreviewDraft.mode === "compose" && (
                                 <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3 space-y-2 dark:border-indigo-800 dark:bg-indigo-950/40">
                                   <div className="flex flex-wrap items-center justify-between gap-2">
                                     <div className="flex flex-wrap items-center gap-1.5">
@@ -1574,9 +1787,9 @@ const EmailActionDetailContent = ({
                                         <FiCpu className="h-3 w-3" />
                                         AI Draft Preview
                                       </span>
-                                      {previewDraft.sources && previewDraft.sources.length > 0 && (
+                                      {composePreviewDraft.sources && composePreviewDraft.sources.length > 0 && (
                                         <span className="rounded-md bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-200">
-                                          Based on {previewDraft.sources.map((s) => s.docTitle).join(", ")} ({previewDraft.chunkCount} passages)
+                                          Based on {composePreviewDraft.sources.map((s) => s.docTitle).join(", ")} ({composePreviewDraft.chunkCount} passages)
                                         </span>
                                       )}
                                     </div>
@@ -1585,7 +1798,7 @@ const EmailActionDetailContent = ({
                                       <Button
                                         size="sm"
                                         variant="success"
-                                        onClick={handleUsePreview}
+                                        onClick={handleUseComposePreview}
                                         disabled={isUpdatingDraft}
                                         className="bg-emerald-600 hover:bg-emerald-700 text-white"
                                       >
@@ -1595,7 +1808,7 @@ const EmailActionDetailContent = ({
                                       <Button
                                         size="sm"
                                         variant="ghost"
-                                        onClick={handleDiscardPreview}
+                                        onClick={handleDiscardComposePreview}
                                         disabled={isUpdatingDraft}
                                       >
                                         Discard
@@ -1603,7 +1816,10 @@ const EmailActionDetailContent = ({
                                       <Button
                                         size="sm"
                                         variant="secondary"
-                                        onClick={handleReviseAgain}
+                                        onClick={() => {
+                                          setComposePreviewDraft(null);
+                                          setAssistPanelOpen(true);
+                                        }}
                                         disabled={isUpdatingDraft}
                                       >
                                         <FiRefreshCw className="h-3 w-3 mr-1" />
@@ -1612,16 +1828,16 @@ const EmailActionDetailContent = ({
                                     </div>
                                   </div>
 
-                                  {previewDraft.ungrounded && (
+                                  {composePreviewDraft.ungrounded && (
                                     <div className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
                                       <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
                                       <span>Ungrounded: check the facts</span>
                                     </div>
                                   )}
 
-                                  {previewDraft.notices && previewDraft.notices.length > 0 && (
+                                  {composePreviewDraft.notices && composePreviewDraft.notices.length > 0 && (
                                     <div className="space-y-1 text-xs text-indigo-900 dark:text-indigo-200">
-                                      {previewDraft.notices.map((n, i) => (
+                                      {composePreviewDraft.notices.map((n, i) => (
                                         <p key={i} className="flex items-center gap-1.5">
                                           <span className="h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
                                           {n}
@@ -1736,17 +1952,36 @@ const EmailActionDetailContent = ({
 
         {/* Footer */}
         <footer className="flex flex-col gap-3 border-t border-slate-200 p-4 dark:border-slate-800">
+          {editor.state.showDiscardConfirm && isEditing && (
+            <div className="flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/50 dark:text-rose-200">
+              <span>Discard changes? Unsaved edits will be lost.</span>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={handleConfirmDiscard}
+                  className="h-6 px-2 text-[11px]"
+                >
+                  Discard
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleKeepEditing}
+                  className="h-6 px-2 text-[11px]"
+                >
+                  Keep editing
+                </Button>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Button
               variant="ghost"
               onClick={() => {
                 if (isEditing) {
-                  setForm({
-                    to: item.to || "",
-                    subject: item.subject || "",
-                    body: latestTurn?.outgoing?.body || item.body || "",
-                  });
-                  setIsEditing(false);
+                  handleCancel();
                 } else {
                   onClose();
                 }
@@ -1761,7 +1996,7 @@ const EmailActionDetailContent = ({
               {isEditing && (
                 <Button
                   variant="success"
-                  onClick={handleSave}
+                  onClick={() => handleSave()}
                   disabled={isBusy}
                 >
                   <FiSave className="h-4 w-4" />

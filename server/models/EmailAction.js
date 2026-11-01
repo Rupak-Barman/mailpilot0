@@ -164,6 +164,21 @@ const OutgoingTurnSchema = new mongoose.Schema(
       },
       at: Date
     },
+    gmailSync: {
+      state: {
+        type: String,
+        enum: ["synced", "failed", "pending"],
+        default: "synced"
+      },
+      reason: {
+        type: String,
+        default: null
+      },
+      at: {
+        type: Date,
+        default: Date.now
+      }
+    },
     versions: [
       {
         versionId: String,
@@ -174,7 +189,7 @@ const OutgoingTurnSchema = new mongoose.Schema(
         },
         source: {
           type: String,
-          enum: ["ai_initial", "ai_revision", "manual_edit"]
+          enum: ["ai_initial", "ai_revision", "manual_edit", "restore"]
         },
         instruction: String,
         useKnowledge: Boolean
@@ -187,6 +202,10 @@ const OutgoingTurnSchema = new mongoose.Schema(
 const TurnSchema = new mongoose.Schema(
   {
     turnId: {
+      type: String,
+      default: () => new mongoose.Types.ObjectId().toString()
+    },
+    versionId: {
       type: String,
       default: () => new mongoose.Types.ObjectId().toString()
     },

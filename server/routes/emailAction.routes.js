@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import auth from "../middleware/auth.js";
 import EmailAction from "../models/EmailAction.js";
 import ProcessedEmail from "../models/ProcessedEmail.js";
@@ -8,6 +9,8 @@ import {
   withGmail,
   updateGmailDraft,
   deleteGmailDraft,
+  isInvalidGrantError,
+  isTransientError
 } from "../services/gmail.service.js";
 import {
   getHeader,
@@ -1299,9 +1302,248 @@ router.patch("/:id/check", auth, async (req, res) => {
 });
 
 // Update a draft in Gmail and synchronize its MongoDB record.
+/**
+ * Helper to synchronize a draft turn to Gmail.
+ * Handles update, 404 sent check, missing recreation, and precise error reasons.
+ */
+export const syncDraftToGmail = async ({
+  user,
+  action,
+  turn,
+  parsedTo,
+  targetCc,
+  targetBcc,
+  subject,
+  body,
+}) => {
+  const turnGmailThreadId = turn?.gmailThreadId || action.threadId;
+  let draftId = turn?.outgoing?.gmailDraftId || action.gmailDraftId;
+  const isFailedOrNeedsManual =
+    turn &&
+    (turn.outcome === "failed" ||
+      turn.outcome === "needs_manual" ||
+      !turn.outgoing?.gmailDraftId);
+
+  try {
+    const syncRes = await withGmail(
+      user,
+      async (gmail) => {
+        const inReplyTo = turn?.rfcMessageId || turn?.inReplyToHeader;
+        const references =
+          [turn?.referencesHeader, turn?.rfcMessageId].filter(Boolean).join(" ") || undefined;
+        const raw = buildMimeMessage({
+          to: parsedTo,
+          cc: targetCc,
+          bcc: targetBcc,
+          subject: subject.trim(),
+          body,
+          inReplyTo,
+          references,
+          isReply: true,
+          userEmail: user.email,
+        });
+
+        if (isFailedOrNeedsManual && !draftId) {
+          const createRes = await gmail.users.drafts.create({
+            userId: "me",
+            requestBody: {
+              message: {
+                raw,
+                threadId: turnGmailThreadId,
+              },
+            },
+          });
+          return { draft: createRes.data, created: true };
+        } else {
+          const updateRes = await gmail.users.drafts.update({
+            userId: "me",
+            id: draftId,
+            requestBody: {
+              message: {
+                raw,
+                ...(turnGmailThreadId ? { threadId: turnGmailThreadId } : {}),
+              },
+            },
+          });
+          return { draft: updateRes.data, updated: true };
+        }
+      },
+      user
+    );
+
+    const updatedData = syncRes.draft || {};
+    const newDraftId = updatedData.id || draftId;
+    if (turn.outgoing) {
+      turn.outgoing.gmailDraftId = newDraftId;
+      if (updatedData.message?.id) {
+        turn.outgoing.gmailMessageId = updatedData.message.id;
+      }
+      turn.outgoing.gmailSync = { state: "synced", reason: null, at: new Date() };
+    }
+    action.gmailDraftId = newDraftId;
+    if (updatedData.message?.id) {
+      action.gmailMessageId = updatedData.message.id;
+    }
+    await action.save();
+
+    return {
+      success: true,
+      message: syncRes.created
+        ? "Gmail draft created successfully"
+        : "Draft updated and synced with Gmail",
+      draftId: newDraftId,
+      recreated: Boolean(syncRes.created),
+    };
+  } catch (error) {
+    const status = error.status || error.response?.status;
+    const isNotFound =
+      status === 404 ||
+      error.message?.includes("404") ||
+      error.message?.includes("Not Found");
+
+    if (isNotFound) {
+      // 404: Draft not found in Gmail. Check thread for a SENT message after draft creation
+      try {
+        const threadCheck = await withGmail(
+          user,
+          async (gmail) => {
+            return await gmail.users.threads.get({
+              userId: "me",
+              id: turnGmailThreadId,
+              format: "metadata",
+              metadataHeaders: ["Date", "From", "Subject", "Message-ID"],
+            });
+          },
+          user
+        );
+
+        const draftCreationTime = turn?.outgoing?.createdAt
+          ? new Date(turn.outgoing.createdAt).getTime()
+          : (turn?.receivedAt ? new Date(turn.receivedAt).getTime() : new Date(action.createdAt).getTime());
+
+        const sentMsg = (threadCheck.data?.messages || []).find((m) => {
+          const labels = m.labelIds || [];
+          const msgDate = Number(m.internalDate || 0);
+          return labels.includes("SENT") && msgDate > draftCreationTime;
+        });
+
+        if (sentMsg) {
+          const sentDate = new Date(Number(sentMsg.internalDate));
+          if (turn.outgoing) {
+            turn.outgoing.status = "sent";
+            turn.outgoing.sentAt = sentDate;
+            turn.outgoing.sentFrom = "gmail";
+            turn.outgoing.gmailMessageId = sentMsg.id;
+            turn.outgoing.gmailSync = { state: "synced", reason: null, at: new Date() };
+          }
+          turn.outcome = "sent";
+          action.status = "sent";
+          action.sentAt = sentDate;
+          action.gmailMessageId = sentMsg.id;
+          await action.save();
+
+          const targetMsgId = turn.incomingMessageId || action.sourceMessageId;
+          if (targetMsgId) {
+            await ProcessedEmail.findOneAndUpdate(
+              { userId: String(user._id || user.id), messageId: targetMsgId },
+              { $set: { sentAt: sentDate, resolvedAt: sentDate, resolution: "ai_draft_sent" } }
+            ).catch(() => null);
+          }
+
+          return {
+            success: true,
+            alreadySent: true,
+            message: "This draft was already sent from Gmail",
+          };
+        } else {
+          // Recreate the missing draft in turn's thread
+          const recreateRes = await withGmail(
+            user,
+            async (gmail) => {
+              const inReplyTo = turn?.rfcMessageId || turn?.inReplyToHeader;
+              const references =
+                [turn?.referencesHeader, turn?.rfcMessageId].filter(Boolean).join(" ") || undefined;
+              const raw = buildMimeMessage({
+                to: parsedTo,
+                cc: targetCc,
+                bcc: targetBcc,
+                subject: subject.trim(),
+                body,
+                inReplyTo,
+                references,
+                isReply: true,
+                userEmail: user.email,
+              });
+
+              return await gmail.users.drafts.create({
+                userId: "me",
+                requestBody: {
+                  message: {
+                    raw,
+                    threadId: turnGmailThreadId,
+                  },
+                },
+              });
+            },
+            user
+          );
+
+          const recreatedDraft = recreateRes.data || {};
+          const recreatedDraftId = recreatedDraft.id;
+          if (turn.outgoing) {
+            turn.outgoing.gmailDraftId = recreatedDraftId;
+            if (recreatedDraft.message?.id) {
+              turn.outgoing.gmailMessageId = recreatedDraft.message.id;
+            }
+            turn.outgoing.gmailSync = { state: "synced", reason: null, at: new Date() };
+          }
+          action.gmailDraftId = recreatedDraftId;
+          if (recreatedDraft.message?.id) {
+            action.gmailMessageId = recreatedDraft.message.id;
+          }
+          await action.save();
+
+          return {
+            success: true,
+            recreated: true,
+            message: "The Gmail draft was missing and has been recreated",
+            draftId: recreatedDraftId,
+          };
+        }
+      } catch (recreateErr) {
+        console.error("[syncDraftToGmail] Recreate draft error on 404:", recreateErr.message);
+      }
+    }
+
+    // Precise reason mapping
+    let reason = "";
+    if (isInvalidGrantError(error) || status === 401) {
+      reason = "Gmail authentication expired. Please reconnect your account.";
+    } else if (isTransientError(error)) {
+      reason = "Network connection error. Gmail could not be reached.";
+    } else if (status === 400) {
+      reason = error.message || "Invalid draft content or headers.";
+    } else {
+      reason = error.message || "Could not update Gmail draft.";
+    }
+
+    if (turn.outgoing) {
+      turn.outgoing.gmailSync = { state: "failed", reason, at: new Date() };
+    }
+    await action.save();
+
+    return {
+      success: false,
+      reason,
+      message: "Draft saved in app. Gmail not updated: " + reason,
+    };
+  }
+};
+
+// Update a draft in MongoDB first, then synchronize with Gmail.
 export const handleUpdateDraft = async (req, res) => {
   try {
-    const { to, cc, bcc, subject, body } = req.body;
+    const { to, cc, bcc, subject, body, baseVersionId, forceOverwrite, generation, version } = req.body;
 
     if (
       to === undefined ||
@@ -1401,15 +1643,26 @@ export const handleUpdateDraft = async (req, res) => {
       });
     }
 
-    let draftId = draftTurn?.outgoing?.gmailDraftId || action.gmailDraftId;
-    if (!isFailedOrNeedsManual && !draftId) {
-      return res.status(400).json({
-        message: "Gmail draft ID is missing",
+    // Optimistic Concurrency Check:
+    const currentVersionId =
+      latestTurn?.versionId ||
+      latestTurn?.outgoing?.versions?.slice(-1)[0]?.versionId;
+    if (
+      baseVersionId &&
+      !forceOverwrite &&
+      currentVersionId &&
+      baseVersionId !== currentVersionId
+    ) {
+      return res.status(409).json({
+        conflict: true,
+        code: "conflict",
+        message: "This draft changed elsewhere (Gmail or another tab)",
+        currentBody: latestTurn?.outgoing?.body || action.body || "",
+        currentVersionId,
       });
     }
 
     const user = await User.findById(req.user.id);
-
     if (!user || !user.refreshToken) {
       return res.status(401).json({
         message: "Gmail connection is unavailable",
@@ -1418,67 +1671,13 @@ export const handleUpdateDraft = async (req, res) => {
 
     const targetCc = parsedCc !== undefined ? parsedCc : (draftTurn?.outgoing?.cc || latestTurn?.outgoing?.cc || []);
     const targetBcc = parsedBcc !== undefined ? parsedBcc : (draftTurn?.outgoing?.bcc || latestTurn?.outgoing?.bcc || []);
-    const turnGmailThreadId = latestTurn?.gmailThreadId || action.threadId;
-
-    let updatedDraft;
-    let createdNewDraft = false;
-
-    if (isFailedOrNeedsManual && !draftId) {
-      // Create new draft in turn's gmailThreadId
-      const inReplyTo = latestTurn?.rfcMessageId || latestTurn?.inReplyToHeader;
-      const references =
-        [latestTurn?.referencesHeader, latestTurn?.rfcMessageId].filter(Boolean).join(" ") || undefined;
-      const raw = buildMimeMessage({
-        to: parsedTo,
-        cc: targetCc,
-        bcc: targetBcc,
-        subject: subject.trim(),
-        body,
-        inReplyTo,
-        references,
-        isReply: true,
-        userEmail: user.email,
-      });
-
-      const draftResult = await withGmail(
-        user,
-        async (gmail) => {
-          return await gmail.users.drafts.create({
-            userId: "me",
-            requestBody: {
-              message: {
-                raw,
-                threadId: turnGmailThreadId,
-              },
-            },
-          });
-        },
-        user
-      );
-
-      updatedDraft = draftResult.data || {};
-      draftId = updatedDraft.id;
-      createdNewDraft = true;
-    } else {
-      const gmail = await getGmail(user);
-      // Update the real Gmail draft
-      updatedDraft = await updateGmailDraft(gmail, {
-        gmailDraftId: draftId,
-        to: parsedTo,
-        cc: targetCc,
-        bcc: targetBcc,
-        subject: subject.trim(),
-        body,
-        threadId: action.threadId,
-        userEmail: user.email,
-      });
-    }
-
-    // Synchronize latest turn if present
     const prevBody = latestTurn?.outgoing?.body;
-    const { generation, version } = req.body || {};
+
+    // 1. SAVE FIRST (MongoDB writes immediately so user text is never lost)
+    const newVersionId = new mongoose.Types.ObjectId().toString();
 
     if (latestTurn) {
+      latestTurn.versionId = newVersionId;
       latestTurn.outcome = "drafted";
       latestTurn.failureReason = null;
       if (!latestTurn.outgoing) {
@@ -1494,14 +1693,11 @@ export const handleUpdateDraft = async (req, res) => {
       if (targetBcc !== undefined) latestTurn.outgoing.bcc = targetBcc;
       latestTurn.outgoing.subject = subject.trim();
       latestTurn.outgoing.body = body;
-      latestTurn.outgoing.gmailDraftId = draftId;
       latestTurn.from = formattedTo;
       latestTurn.incomingSubject = subject.trim();
-      if (updatedDraft.message?.id) {
-        latestTurn.outgoing.gmailMessageId = updatedDraft.message.id;
-      }
+      latestTurn.outgoing.gmailSync = { state: "pending", reason: null, at: new Date() };
 
-      // Store generation metadata
+      // Store generation metadata if provided
       if (generation) {
         latestTurn.outgoing.generation = {
           mode: generation.mode || "user_assisted",
@@ -1515,58 +1711,58 @@ export const handleUpdateDraft = async (req, res) => {
         };
       }
 
-      // Keep versions[] (max 10)
+      // Manage versions[] (max 10) - deduplicate if body equals latest version
       if (!Array.isArray(latestTurn.outgoing.versions)) {
         latestTurn.outgoing.versions = [];
       }
-      if (version && version.versionId) {
+      const latestVer = latestTurn.outgoing.versions.slice(-1)[0];
+      if (!latestVer || latestVer.body !== body) {
+        const verSource =
+          version?.source ||
+          (version?.versionId ? "ai_revision" : (prevBody ? "manual_edit" : "ai_initial"));
         latestTurn.outgoing.versions.push({
-          versionId: version.versionId,
+          versionId: version?.versionId || newVersionId,
           body,
           at: new Date(),
-          source: version.source || "ai_revision",
-          instruction: version.instruction || "",
-          useKnowledge: Boolean(version.useKnowledge),
+          source: verSource,
+          instruction: version?.instruction || generation?.instruction || "",
+          useKnowledge: Boolean(version?.useKnowledge ?? generation?.useKnowledge),
         });
-      } else if (prevBody && prevBody !== body) {
-        latestTurn.outgoing.versions.push({
-          versionId: new mongoose.Types.ObjectId().toString(),
-          body,
-          at: new Date(),
-          source: "manual_edit",
-        });
-      }
-      if (latestTurn.outgoing.versions.length > 10) {
-        latestTurn.outgoing.versions = latestTurn.outgoing.versions.slice(-10);
+        if (latestTurn.outgoing.versions.length > 10) {
+          latestTurn.outgoing.versions = latestTurn.outgoing.versions.slice(-10);
+        }
       }
     }
 
-    // Synchronize MongoDB top-level record with the edited content.
     action.type = "draft";
     action.status = "draft";
-    action.gmailDraftId = draftId;
     action.to = formattedTo;
     if (targetCc !== undefined) action.cc = formatRecipientList(targetCc);
     if (targetBcc !== undefined) action.bcc = formatRecipientList(targetBcc);
     action.subject = subject.trim();
     action.body = body;
 
-    // Gmail may return the underlying message ID.
-    if (updatedDraft.message?.id) {
-      action.gmailMessageId = updatedDraft.message.id;
-    }
-
     await action.save();
 
-    if (createdNewDraft) {
+    // 2. SYNC SECOND (update or recreate in Gmail)
+    const syncResult = await syncDraftToGmail({
+      user,
+      action,
+      turn: latestTurn,
+      parsedTo,
+      targetCc,
+      targetBcc,
+      subject,
+      body,
+    });
+
+    if (syncResult.recreated) {
       const targetMessageId = latestTurn?.incomingMessageId || action.sourceMessageId;
       if (targetMessageId) {
         await ProcessedEmail.findOneAndUpdate(
           { userId: String(req.user.id), messageId: targetMessageId },
           { $set: { status: "done", outcome: "drafted" } }
-        ).catch((err) =>
-          console.warn("[PATCH /:id] Failed to update ProcessedEmail:", err.message)
-        );
+        ).catch(() => null);
       }
     }
 
@@ -1581,40 +1777,74 @@ export const handleUpdateDraft = async (req, res) => {
     });
 
     return res.json({
-      message: "Draft updated successfully",
+      message: syncResult.message || "Draft updated successfully",
       action,
+      gmailSync: latestTurn?.outgoing?.gmailSync,
+      syncWarning: !syncResult.success,
+      recreated: Boolean(syncResult.recreated),
+      alreadySent: Boolean(syncResult.alreadySent),
     });
   } catch (error) {
     console.error("Update draft error:", error.message);
-
-    const status = error.status || error.response?.status;
-    if (status === 404 || error.message?.includes("404") || error.message?.includes("Not Found")) {
-      const recResult = await reconcileTurn(user, action, draftTurn, { gmail }).catch(() => null);
-      if (recResult?.status === "sent") {
-        return res.status(409).json({
-          message: "Draft was already sent in Gmail and cannot be edited",
-          action
-        });
-      }
-      if (recResult?.status === "deleted") {
-        return res.status(409).json({
-          message: "Draft was deleted in Gmail and cannot be edited",
-          action
-        });
-      }
-      return res.status(404).json({
-        message: "Draft no longer exists in Gmail",
-        action
-      });
-    }
-
-    return res.status(502).json({
-      message: "Could not update the Gmail draft",
+    return res.status(500).json({
+      message: error.message || "Failed to save draft",
     });
   }
 };
 
+// Retry Gmail synchronization for a draft turn
+export const handleRetryGmailSync = async (req, res) => {
+  try {
+    const action = await EmailAction.findOne({
+      _id: req.params.id,
+      userId: req.user.id,
+    });
+
+    if (!action) {
+      return res.status(404).json({ message: "Draft not found" });
+    }
+
+    const turns = action.turns || [];
+    const latestTurn = turns.length > 0 ? turns[turns.length - 1] : null;
+    if (!latestTurn || !latestTurn.outgoing || latestTurn.outgoing.kind !== "draft") {
+      return res.status(400).json({ message: "No active draft found on this item" });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user || !user.refreshToken) {
+      return res.status(401).json({ message: "Gmail connection is unavailable" });
+    }
+
+    const syncResult = await syncDraftToGmail({
+      user,
+      action,
+      turn: latestTurn,
+      parsedTo: latestTurn.outgoing.to,
+      targetCc: latestTurn.outgoing.cc || [],
+      targetBcc: latestTurn.outgoing.bcc || [],
+      subject: latestTurn.outgoing.subject || action.subject || "",
+      body: latestTurn.outgoing.body || action.body || "",
+    });
+
+    publishUserEvent(req.user.id, {
+      type: "emailAction.changed",
+      threadId: action.threadId || action._id,
+      at: Date.now(),
+    });
+
+    return res.json({
+      message: syncResult.message,
+      action,
+      gmailSync: latestTurn.outgoing.gmailSync,
+      success: syncResult.success,
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message || "Failed to retry Gmail sync" });
+  }
+};
+
 router.patch("/:id", auth, handleUpdateDraft);
+router.post("/:id/retry-gmail-sync", auth, handleRetryGmailSync);
 
 // Delete the Gmail draft and its MongoDB record.
 export const handleDeleteDraft = async (req, res) => {

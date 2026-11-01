@@ -227,7 +227,8 @@ describe("Email Body Formatting, Paragraph Normalization & Framing", () => {
 
     // Verifies state update does not strip newlines
     assert.ok(
-      detailComponentSrc.includes("setForm((prev) => ({ ...prev, body: res.body }))"),
+      detailComponentSrc.includes("editor.setAiPreview(previewObj)") ||
+        detailComponentSrc.includes("setForm((prev) => ({ ...prev, body: res.body }))"),
       "Assist draft update must set res.body directly without stripping newlines"
     );
   });
