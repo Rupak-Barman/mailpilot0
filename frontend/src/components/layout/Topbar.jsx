@@ -3,7 +3,7 @@ import { Button } from "../common/Button";
 import { useAuth } from "../../hooks/useAuth";
 import { useSyncStatus } from "../../hooks/useSyncStatus";
 
-export const Topbar = ({ email }) => {
+export const Topbar = ({ email, realtimeStatus }) => {
   const { theme, setTheme } = useAuth();
   const nextTheme = theme === "dark" ? "light" : "dark";
   const { data: syncData, isLoading, isError } = useSyncStatus();
@@ -57,13 +57,36 @@ export const Topbar = ({ email }) => {
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-950 lg:pl-72 lg:pr-7">
-      {/* Left: sync status */}
-      <div
-        className={`flex items-center gap-2 text-xs font-medium ${textColor}`}
-        title={tooltip}
-      >
-        <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} />
-        {statusText}
+      {/* Left: sync status & realtime indicator */}
+      <div className="flex items-center gap-3">
+        <div
+          className={`flex items-center gap-2 text-xs font-medium ${textColor}`}
+          title={tooltip}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} />
+          {statusText}
+        </div>
+
+        {/* Realtime stream indicator */}
+        {realtimeStatus === "live" && (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400"
+            title="Realtime stream active"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            Live
+          </span>
+        )}
+
+        {realtimeStatus === "reconnecting" && (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400"
+            title="Reconnecting realtime stream..."
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+            Reconnecting...
+          </span>
+        )}
       </div>
 
       {/* Right: controls */}

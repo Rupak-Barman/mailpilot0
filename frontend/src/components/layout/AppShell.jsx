@@ -4,17 +4,19 @@ import { Topbar } from "./Topbar";
 import { MobileNav } from "./MobileNav";
 import { useAuth } from "../../hooks/useAuth";
 import { useProfileSettings } from "../../hooks/useProfileSettings";
+import { useRealtime } from "../../hooks/useRealtime";
 
 export const AppShell = () => {
   const { isAuthed } = useAuth();
   const { data } = useProfileSettings();
+  const { status: realtimeStatus } = useRealtime();
 
   if (!isAuthed) return <Navigate to="/login" replace />;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-slate-50">
       <Sidebar />
-      <Topbar email={data?.profile?.email} />
+      <Topbar email={data?.profile?.email} realtimeStatus={realtimeStatus} />
       <main className="pb-20 pt-4 lg:ml-64 lg:pb-8">
         <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
           <Outlet />

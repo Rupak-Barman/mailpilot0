@@ -482,12 +482,66 @@ unchecked         – EmailAction where checked:false (All time – do not filte
 - If client fails to send `from`/`to` params, server falls back to UTC day boundaries.
 
 ### Test plan
-- [ ] Seed ProcessedEmail docs across 2 days; verify daily counts match client-sent ISO boundaries.
-- [ ] Confirm "Failed" card shows correct count.
-- [ ] Confirm "Unchecked" card is "All time" (does NOT filter by updatedAt or date range).
-- [ ] Confirm "Resolved Manually" and "Replies sent" derive strictly from `ProcessedEmail`, not `EmailAction`.
-- [ ] Confirm Failed items appear in Recent Activity feed.
-- [ ] `server/tests/analytics.test.js` using `node:test`; seed data, assert counts.
+- [x] Seed ProcessedEmail docs across 2 days; verify daily counts match client-sent ISO boundaries.
+- [x] Confirm "Failed" card shows correct count.
+- [x] Confirm "Unchecked" card is "All time" (does NOT filter by updatedAt or date range).
+- [x] Confirm "Resolved Manually" and "Replies sent" derive strictly from `ProcessedEmail`, not `EmailAction`.
+- [x] Confirm Failed items appear in Recent Activity feed.
+- [x] `server/tests/analytics.test.js` using `node:test`; seed data, assert counts.
+
+---
+
+## Batch 5.5 – Realtime Updates (SSE + In-Memory Event Bus)
+
+### Overview
+Replaces reliance on pure interval polling with instant push notifications via Server-Sent Events (SSE). Client invalidates queries immediately when data changes, with debouncing for bursts and automatic exponential backoff. Polling remains as a seamless backup when disconnected.
+
+### Architecture & Design
+1. **Server Event Bus (`server/services/events.service.js`):**
+   - User-scoped `EventEmitter` with channel `user:<userId>`.
+   - Small event payloads: `{ type: "emailAction.changed" | "analytics.changed" | "sync.changed", threadId?, at }`.
+2. **SSE Streaming Endpoint (`server/routes/events.routes.js`):**
+   - `GET /events` streaming `text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`.
+   - `res.flushHeaders()` and `X-Accel-Buffering: no` (no compression).
+   - Exempt from rate limiters.
+   - Heartbeat comment `: ping\n\n` every 25s.
+   - Immediate listener unsubscribe and timer cleanup on `req.on("close")`.
+   - Authenticated with standard `auth` middleware using `Authorization: Bearer <token>` (no token in query string).
+3. **Data Mutation Publishers:**
+   - `poll.job.js`: turn created or updated, needs_manual, failed, skipped, ProcessedEmail finished, and syncStatus changes.
+   - `emailAction.routes.js`: send draft, manual-send, delete, check/uncheck, label change, and draft edits.
+   - Read-only endpoints (`GET /`, `GET /summary`, `GET /analytics`) never emit events.
+4. **Frontend Realtime Hook (`frontend/src/hooks/useRealtime.js`):**
+   - Mounted once in `AppShell.jsx`.
+   - Connects using `@microsoft/fetch-event-source` with `Authorization` header.
+   - `DebouncedInvalidator`: coalesces bursts of events within 500 ms to a single queryClient invalidation batch.
+   - Reconnect with exponential backoff; triggers a query refetch upon reconnection.
+   - Exposes status (`live`, `reconnecting`, `disconnected`) to `Topbar.jsx` for a subtle indicator.
+   - Keeps polling (20s on email actions, 30s on analytics) active as a failover.
+
+### Files changed / created
+| File | Role |
+|---|---|
+| `server/services/events.service.js` | In-memory event bus keyed by userId |
+| `server/routes/events.routes.js` | SSE route handler with keepalive ping and close cleanup |
+| `server/app.js` | Mounts `/events` and `/api/events` |
+| `server/jobs/poll.job.js` | Emits `emailAction.changed`, `analytics.changed`, `sync.changed` |
+| `server/routes/emailAction.routes.js` | Emits events on draft send, label update, delete, check toggle, manual reply |
+| `server/services/gmail.service.js` | Emits `sync.changed` on invalid_grant |
+| `frontend/src/utils/realtimeInvalidator.js` | 500ms debounced TanStack query invalidator |
+| `frontend/src/hooks/useRealtime.js` | React hook managing SSE connection and reconnect backoff |
+| `frontend/src/components/layout/AppShell.jsx` | Mounts `useRealtime` and provides realtime status |
+| `frontend/src/components/layout/Topbar.jsx` | Renders "Live" / "Reconnecting..." badge |
+| `server/tests/events-service.test.js` | Unit tests for event bus publish/subscribe and cleanup |
+| `server/tests/sse-route.test.js` | Unit tests for SSE response headers, stream write, and close cleanup |
+| `server/tests/debounce-invalidation.test.js` | Unit tests for 500ms burst coalescing and invalidations |
+
+### Test plan
+- [x] Event bus publish/subscribe and cleanup on close (`server/tests/events-service.test.js`).
+- [x] SSE route test for headers, stream event write, and connection close cleanup (`server/tests/sse-route.test.js`).
+- [x] Debounce bursts test (multiple events in <500ms produce single invalidation) (`server/tests/debounce-invalidation.test.js`).
+- [x] Frontend production build compiles without errors.
+- [x] All 132 server tests pass with 0 failures.
 
 ---
 
@@ -877,11 +931,21 @@ These tests must pass before marking the fix plan complete.
 - [x] 4.5 Status badge redesign
 
 ### Batch 5 – Analytics
-- [ ] 5.1 Switch source of truth to `ProcessedEmail`
-- [ ] 5.2 Client-sent local from/to ISO boundaries (prefer over luxon)
-- [ ] 5.3 Verify Unchecked metric is All-time (checked:false, not filtered by updatedAt)
-- [ ] 5.4 New metrics (failed, needsManual, etc.)
-- [ ] 5.5 Write `server/tests/analytics.test.js`
+- [x] 5.1 Switch source of truth to `ProcessedEmail`
+- [x] 5.2 Client-sent local from/to ISO boundaries (prefer over luxon)
+- [x] 5.3 Verify Unchecked metric is All-time (checked:false, not filtered by updatedAt)
+- [x] 5.4 New metrics (failed, needsManual, etc.)
+- [x] 5.5 Write `server/tests/analytics.test.js`
+
+### Batch 5.5 – Realtime Updates
+- [x] 5.5.1 In-memory event bus (EventEmitter) keyed by userId (`server/services/events.service.js`)
+- [x] 5.5.2 SSE route `GET /events` with ping, no compression, rate limit exemption, client close cleanup (`server/routes/events.routes.js`)
+- [x] 5.5.3 Publish events on state changes in `poll.job.js`, `emailAction.routes.js`, and sync status transitions
+- [x] 5.5.4 Frontend `useRealtime` hook with `@microsoft/fetch-event-source` using Authorization header
+- [x] 5.5.5 Debounced invalidation (<= 1 flush per 500ms) for emailActions, analytics, and sync-status
+- [x] 5.5.6 Reconnect backoff with refetch on reconnect & Topbar "Live" / "Reconnecting..." indicator
+- [x] 5.5.7 Fallback to polling (20s on emailActions, 30s on analytics)
+- [x] 5.5.8 Unit & integration tests for event bus, SSE route, and debounce invalidation logic
 
 ### Batch 6 – MIME / Formatting
 - [x] 6.1 76-char base64 wrapping

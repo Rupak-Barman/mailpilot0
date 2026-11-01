@@ -11,6 +11,7 @@ import {
 } from "../services/gmail.service.js";
 import { getHeader, buildMimeMessage } from "../utils/helpers.js";
 import { generateEmailAnalysis } from "../services/aiEngine.js";
+import { publishUserEvent } from "../services/events.service.js";
 
 const router = express.Router();
 
@@ -458,6 +459,16 @@ router.patch("/:id/label", auth, async (req, res) => {
     action.label = label;
     await action.save();
 
+    publishUserEvent(req.user.id, {
+      type: "emailAction.changed",
+      threadId: action.threadId || action._id,
+      at: Date.now(),
+    });
+    publishUserEvent(req.user.id, {
+      type: "analytics.changed",
+      at: Date.now(),
+    });
+
     return res.json({
       message: "Gmail and Mailpilot labels updated successfully",
       action,
@@ -624,6 +635,16 @@ router.post("/:id/send", auth, async (req, res) => {
       ).catch((err) => console.warn("[emailAction] Failed to update ProcessedEmail:", err.message));
     }
 
+    publishUserEvent(req.user.id, {
+      type: "emailAction.changed",
+      threadId: action.threadId || action._id,
+      at: Date.now(),
+    });
+    publishUserEvent(req.user.id, {
+      type: "analytics.changed",
+      at: Date.now(),
+    });
+
     return res.json({
       message: "Email sent successfully",
       action,
@@ -768,6 +789,16 @@ export const handleManualSend = async (req, res) => {
       ).catch((err) => console.warn("[manual-send] Failed to update ProcessedEmail:", err.message));
     }
 
+    publishUserEvent(req.user.id, {
+      type: "emailAction.changed",
+      threadId: action.threadId || action._id,
+      at: Date.now()
+    });
+    publishUserEvent(req.user.id, {
+      type: "analytics.changed",
+      at: Date.now()
+    });
+
     return res.json({
       message: "Reply sent successfully",
       action
@@ -900,6 +931,16 @@ export const handleTryAiDraft = async (req, res) => {
       ).catch((err) => console.warn("[try-ai-draft] Failed to update ProcessedEmail:", err.message));
     }
 
+    publishUserEvent(req.user.id, {
+      type: "emailAction.changed",
+      threadId: action.threadId || action._id,
+      at: Date.now()
+    });
+    publishUserEvent(req.user.id, {
+      type: "analytics.changed",
+      at: Date.now()
+    });
+
     return res.json({
       message: "Draft generated with retrieval gate bypassed",
       action,
@@ -931,6 +972,16 @@ router.patch("/:id/check", auth, async (req, res) => {
   if (!action) {
     return res.status(404).json({ message: "Email action not found" });
   }
+
+  publishUserEvent(req.user.id, {
+    type: "emailAction.changed",
+    threadId: action.threadId || action._id,
+    at: Date.now(),
+  });
+  publishUserEvent(req.user.id, {
+    type: "analytics.changed",
+    at: Date.now(),
+  });
 
   res.json(action);
 });
@@ -1043,6 +1094,16 @@ router.patch("/:id", auth, async (req, res) => {
 
     await action.save();
 
+    publishUserEvent(req.user.id, {
+      type: "emailAction.changed",
+      threadId: action.threadId || action._id,
+      at: Date.now(),
+    });
+    publishUserEvent(req.user.id, {
+      type: "analytics.changed",
+      at: Date.now(),
+    });
+
     return res.json({
       message: "Draft updated successfully",
       action,
@@ -1130,6 +1191,16 @@ router.delete("/:id", auth, async (req, res) => {
         userId: req.user.id,
       });
     }
+
+    publishUserEvent(req.user.id, {
+      type: "emailAction.changed",
+      threadId: action.threadId || action._id,
+      at: Date.now(),
+    });
+    publishUserEvent(req.user.id, {
+      type: "analytics.changed",
+      at: Date.now(),
+    });
 
     return res.json({
       message: "Draft deleted successfully",

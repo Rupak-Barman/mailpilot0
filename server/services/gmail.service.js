@@ -2,6 +2,7 @@
 import "dotenv/config";
 import { google } from "googleapis";
 import { buildMimeMessage } from "../utils/helpers.js";
+import { publishUserEvent } from "./events.service.js";
 
 /**
  * Typed error for Google OAuth2 invalid_grant situations.
@@ -45,6 +46,7 @@ export const handleInvalidGrant = async (user, error) => {
       if (typeof user.save === "function") {
         await user.save();
       }
+      publishUserEvent(user._id, { type: "sync.changed", at: Date.now() });
     } catch (saveErr) {
       console.error("[gmail] Error saving user on invalid_grant:", saveErr);
     }

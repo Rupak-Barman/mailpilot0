@@ -6,5 +6,6 @@ export const useAnalytics = (filters) =>
     queryKey: ["analytics", filters],
     queryFn: () => getAnalytics(filters),
     refetchOnWindowFocus: true,
+    refetchInterval: 30_000,
     staleTime: 15000,
   });

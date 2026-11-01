@@ -14,6 +14,7 @@ import profileRoutes from "./routes/profile.routes.js";
 import knowledgeRoutes from "./routes/knowledge.routes.js";
 import personaRoutes from "./routes/persona.routes.js";
 import syncRoutes from "./routes/sync.routes.js";
+import eventsRoutes from "./routes/events.routes.js";
 import { checkOllamaHealth } from "./services/ollama.service.js";
 
 dotenv.config();
@@ -31,6 +32,8 @@ app.use("/profile", profileRoutes);
 app.use("/knowledge", knowledgeRoutes);
 app.use("/personas", personaRoutes);
 app.use("/sync-status", syncRoutes);
+app.use("/events", eventsRoutes);
+app.use("/api/events", eventsRoutes);
 app.get("/health", (_, res) => res.send("OK"));
 
 if (process.env.NODE_ENV !== "test") {

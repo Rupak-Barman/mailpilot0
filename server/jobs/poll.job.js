@@ -10,6 +10,7 @@ import {
   isTransientAIError
 } from "../services/aiEngine.js";
 import { updateAnalytics } from "../services/analytics.service.js";
+import { publishUserEvent } from "../services/events.service.js";
 import { getHeader, buildMimeMessage, stripQuotedAndHtml } from "../utils/helpers.js";
 
 // Configuration defaults
@@ -417,6 +418,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
         claimDoc.outcome = "skipped";
         claimDoc.failureReason = loopCheck.reason;
         await claimDoc.save();
+        publishUserEvent(user._id, { type: "analytics.changed", at: Date.now() });
       } else {
         validEmailEntries.push(entry);
       }
@@ -435,6 +437,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
         claimDoc.outcome = "none";
         claimDoc.failureReason = "no_enabled_labels";
         await claimDoc.save();
+        publishUserEvent(user._id, { type: "analytics.changed", at: Date.now() });
       }
       return { processed: false, outcome: "none", reason: "no_enabled_labels" };
     }
@@ -542,6 +545,15 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
                 sourceMessageId: newestEntry.item.id
               });
             }
+            publishUserEvent(user._id, {
+              type: "emailAction.changed",
+              threadId: String(effectiveThreadId),
+              at: Date.now()
+            });
+            publishUserEvent(user._id, {
+              type: "analytics.changed",
+              at: Date.now()
+            });
           } catch (recErr) {
             console.warn("[poll] Could not record failed EmailAction turn:", recErr.message);
           }
@@ -567,6 +579,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
         entry.claimDoc.label = selectedLabelName || "unknown";
         entry.claimDoc.failureReason = `Label '${selectedLabelName}' not found or disabled`;
         await entry.claimDoc.save();
+        publishUserEvent(user._id, { type: "analytics.changed", at: Date.now() });
       }
       return { processed: false, outcome: "none", reason: "label_not_found" };
     }
@@ -930,6 +943,16 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     }
     await newestEntry.claimDoc.save();
 
+    publishUserEvent(user._id, {
+      type: "emailAction.changed",
+      threadId: String(effectiveThreadId),
+      at: Date.now()
+    });
+    publishUserEvent(user._id, {
+      type: "analytics.changed",
+      at: Date.now()
+    });
+
     if (!isNeedsManual) {
       await updateAnalytics({
         userId: user._id,
@@ -973,6 +996,15 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
         await entry.claimDoc.save().catch(() => {});
       }
     }
+    publishUserEvent(user._id, {
+      type: "emailAction.changed",
+      threadId: String(threadId),
+      at: Date.now()
+    });
+    publishUserEvent(user._id, {
+      type: "analytics.changed",
+      at: Date.now()
+    });
     return { processed: false, reason: err.message };
   }
 };
@@ -1022,6 +1054,7 @@ export const syncUser = async (user, options = {}) => {
     user.syncStatus = "running";
     user.syncError = null;
     await user.save();
+    publishUserEvent(user._id, { type: "sync.changed", at: Date.now() });
 
     const gmail = options.gmailClient || (await getGmail(user));
 
@@ -1239,12 +1272,14 @@ export const syncUser = async (user, options = {}) => {
     user.syncStatus = "idle";
     user.syncError = null;
     await user.save();
+    publishUserEvent(user._id, { type: "sync.changed", at: Date.now() });
 
     return { success: true, processedCount, totalFound: messageItems.length };
   } catch (err) {
     user.syncStatus = "error";
     user.syncError = err.message;
     await user.save().catch(() => {});
+    publishUserEvent(user._id, { type: "sync.changed", at: Date.now() });
     throw err;
   } finally {
     activeUserLocks.delete(userIdStr);

@@ -334,3 +334,4 @@ describe("BATCH 4: Server-side search and filter query builder", () => {
     assert.deepEqual(failedFilter.$or[0].$expr.$in[1], ["failed", "needs_manual"]);
   });
 });
+

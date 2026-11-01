@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { MetricCards } from "../features/analytics/MetricCards";
 import { ActionBreakdown, LabelDistribution, RecentActivityFeed } from "../features/analytics/Charts";
 import { Button } from "../components/common/Button";
@@ -13,7 +13,20 @@ const ranges = [
 
 export const AnalyticsPage = () => {
   const [days, setDays] = useState(7);
-  const analytics = useAnalytics({ days });
+
+  // Compute browser-local midnight and end-of-day ISO boundaries
+  const dateRange = useMemo(() => {
+    const now = new Date();
+    const to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1), 0, 0, 0, 0);
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      days
+    };
+  }, [days]);
+
+  const analytics = useAnalytics(dateRange);
   const summary = useEmailActionSummary();
 
   if (analytics.isLoading || summary.isLoading) return <LoadingState label="Loading analytics" />;

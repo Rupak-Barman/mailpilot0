@@ -4,7 +4,7 @@ import {
   PieChart,
   ResponsiveContainer
 } from "recharts";
-import { FiCornerUpLeft, FiFileText, FiClock } from "react-icons/fi";
+import { FiCornerUpLeft, FiFileText, FiClock, FiAlertTriangle, FiHelpCircle } from "react-icons/fi";
 import { Card } from "../../components/common/Card";
 import { Badge } from "../../components/common/Badge";
 import { compactNumber, formatDateTime, titleCase } from "../../utils/formatters";
@@ -17,7 +17,8 @@ const actionColors = {
 
 /**
  * Recent Activity Feed
- * Displays the latest processed email actions with category and status badges.
+ * Displays the latest processed email actions with category and status badges,
+ * including Failed and Needs Manual items.
  */
 export const RecentActivityFeed = ({ items = [] }) => (
   <Card className="flex flex-col p-5">
@@ -39,58 +40,76 @@ export const RecentActivityFeed = ({ items = [] }) => (
           No recent activity
         </p>
         <p className="mt-1 text-xs text-slate-400">
-          Processed drafts and replies will appear here automatically.
+          Processed drafts, replies, and failures will appear here automatically.
         </p>
       </div>
     ) : (
       <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-        {items.map((item) => (
-          <div
-            key={item._id}
-            className="flex items-center justify-between gap-4 py-3"
-          >
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 dark:bg-zinc-800">
-                {item.type === "reply" ? (
-                  <FiCornerUpLeft className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                ) : (
-                  <FiFileText className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-                )}
-              </span>
+        {items.map((item) => {
+          const isFailed = item.status === "failed" || item.outcome === "failed" || item.status === "send_failed";
+          const isNeedsManual = item.status === "needs_manual" || item.outcome === "needs_manual";
+          const isSent = item.status === "sent" || item.type === "reply";
 
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-                  {item.subject || "No subject"}
-                </p>
-                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                  <span className="truncate max-w-[180px]">{item.to || "Unknown"}</span>
-                  {item.label && (
-                    <Badge tone="blue" className="py-0 text-[10px]">
-                      {item.label}
-                    </Badge>
+          const badgeTone = isFailed
+            ? "rose"
+            : isNeedsManual
+              ? "amber"
+              : isSent
+                ? "emerald"
+                : "slate";
+
+          const badgeLabel = isFailed
+            ? "Failed"
+            : isNeedsManual
+              ? "Needs manual"
+              : item.status
+                ? titleCase(item.status.replace("_", " "))
+                : titleCase(item.type);
+
+          return (
+            <div
+              key={item._id}
+              className="flex items-center justify-between gap-4 py-3"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 dark:bg-zinc-800">
+                  {isFailed ? (
+                    <FiAlertTriangle className="h-4 w-4 text-rose-600 dark:text-rose-400" />
+                  ) : isNeedsManual ? (
+                    <FiHelpCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  ) : isSent ? (
+                    <FiCornerUpLeft className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                  ) : (
+                    <FiFileText className="h-4 w-4 text-slate-500 dark:text-slate-400" />
                   )}
+                </span>
+
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
+                    {item.subject || "No subject"}
+                  </p>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    <span className="truncate max-w-[180px]">{item.to || "Unknown"}</span>
+                    {item.label && (
+                      <Badge tone="blue" className="py-0 text-[10px]">
+                        {item.label}
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="flex shrink-0 flex-col items-end gap-1">
-              <Badge
-                tone={
-                  item.status === "sent"
-                    ? "emerald"
-                    : item.status === "send_failed"
-                      ? "rose"
-                      : "slate"
-                }
-              >
-                {item.status ? titleCase(item.status.replace("_", " ")) : titleCase(item.type)}
-              </Badge>
-              <span className="text-[11px] text-slate-400">
-                {formatDateTime(item.createdAt)}
-              </span>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <Badge tone={badgeTone}>
+                  {badgeLabel}
+                </Badge>
+                <span className="text-[11px] text-slate-400">
+                  {formatDateTime(item.createdAt)}
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     )}
   </Card>
