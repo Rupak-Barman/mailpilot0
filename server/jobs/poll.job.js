@@ -1382,8 +1382,35 @@ export const pollAllUsers = async (options = {}) => {
   }
 };
 
+let cronTask = null;
+
 export const startPolling = () => {
-  cron.schedule("* * * * *", async () => {
+  if (cronTask) return cronTask;
+  cronTask = cron.schedule("* * * * *", async () => {
     await pollAllUsers();
   });
+  return cronTask;
+};
+
+export const stopPolling = () => {
+  if (cronTask) {
+    cronTask.stop();
+    cronTask = null;
+    console.log("[poll] Cron schedule stopped.");
+  }
+};
+
+export const waitForInFlightPoll = async (timeoutMs = 10000) => {
+  if (!cronInProgress && activeUserLocks.size === 0) {
+    return true;
+  }
+  const start = Date.now();
+  while ((cronInProgress || activeUserLocks.size > 0) && (Date.now() - start < timeoutMs)) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const completed = !cronInProgress && activeUserLocks.size === 0;
+  if (!completed) {
+    console.warn(`[poll] In-flight poll drain timed out after ${timeoutMs}ms (${activeUserLocks.size} active locks). Claim-first deduplication guarantees idempotency on restart.`);
+  }
+  return completed;
 };

@@ -122,3 +122,4 @@ const isMain =
 if (isMain) {
   runCli();
 }
+

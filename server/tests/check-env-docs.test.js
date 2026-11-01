@@ -53,3 +53,4 @@ test("verifyEnvDocs passes on current project codebase", () => {
   assert.equal(result.valid, true, `Expected valid env docs, got errors: ${result.errors.join("; ")}`);
   assert.equal(result.errors.length, 0);
 });
+

@@ -5,11 +5,25 @@ import { subscribeUserEvents } from "../services/events.service.js";
 
 const router = express.Router();
 
+export const activeSSEConnections = new Set();
+
+export const closeAllSSEConnections = () => {
+  for (const res of activeSSEConnections) {
+    try {
+      res.write("event: shutdown\ndata: {}\n\n");
+      res.end();
+    } catch {}
+  }
+  activeSSEConnections.clear();
+};
+
 export const handleEventsStream = (req, res) => {
   const userId = req.user?.id || req.user?._id;
   if (!userId) {
     return res.status(401).json({ message: "Unauthorized" });
   }
+
+  activeSSEConnections.add(res);
 
   // SSE headers
   res.setHeader("Content-Type", "text/event-stream");
@@ -57,6 +71,7 @@ export const handleEventsStream = (req, res) => {
   const cleanup = () => {
     if (isCleanedUp) return;
     isCleanedUp = true;
+    activeSSEConnections.delete(res);
     clearInterval(pingInterval);
     unsubscribe();
   };

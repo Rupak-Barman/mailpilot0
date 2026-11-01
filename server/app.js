@@ -23,7 +23,9 @@ import knowledgeRoutes from "./routes/knowledge.routes.js";
 import personaRoutes from "./routes/persona.routes.js";
 import syncRoutes from "./routes/sync.routes.js";
 import eventsRoutes from "./routes/events.routes.js";
+import fs from "node:fs";
 import { checkOllamaHealth } from "./services/ollama.service.js";
+import { registerShutdownHandlers } from "./services/shutdown.service.js";
 
 const app = express();
 
@@ -104,6 +106,37 @@ app.use((err, req, res, next) => {
   res.status(statusCode).json({ error: clientMessage });
 });
 
+export const printStartupBanner = ({ HOST, PORT }) => {
+  let version = "1.0.0";
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")
+    );
+    if (pkg.version) version = pkg.version;
+  } catch {}
+
+  const clientUrl = process.env.CLIENT_URL || "http://localhost:5173";
+  const baseUrl = process.env.BASE_URL || `http://${HOST}:${PORT}`;
+  const callbackUrl = `${baseUrl}/auth/google/callback`;
+  const llmModel = process.env.OLLAMA_LLM_MODEL || "qwen2.5:7b";
+  const embeddingModel = process.env.OLLAMA_EMBEDDING_MODEL || "embeddinggemma-2:270m";
+  const syncEnabled = process.env.SYNC_ENABLED !== "false" ? "Enabled (cron every 1 min)" : "Disabled";
+
+  console.log("");
+  console.log("┌────────────────────────────────────────────────────────────────────────┐");
+  console.log(`│  Mailpilot Email Agent  v${version.padEnd(46)}│`);
+  console.log("├────────────────────────────────────────────────────────────────────────┤");
+  console.log(`│  Backend API:      http://${HOST}:${PORT}`.padEnd(73) + "│");
+  console.log(`│  Frontend Client:  ${clientUrl}`.padEnd(73) + "│");
+  console.log(`│  OAuth Redirect:   ${callbackUrl}`.padEnd(73) + "│");
+  console.log(`│  LLM Model:        ${llmModel}`.padEnd(73) + "│");
+  console.log(`│  Embedding Model:  ${embeddingModel}`.padEnd(73) + "│");
+  console.log(`│  Poll Interval:    every 1 min`.padEnd(73) + "│");
+  console.log(`│  Sync Engine:      ${syncEnabled}`.padEnd(73) + "│");
+  console.log("└────────────────────────────────────────────────────────────────────────┘");
+  console.log("");
+};
+
 if (process.env.NODE_ENV !== "test") {
   connectDB().then(async () => {
     // 1. Boot-time idempotent token migration
@@ -120,12 +153,17 @@ if (process.env.NODE_ENV !== "test") {
     const PORT = parseInt(process.env.PORT, 10) || 3000;
     const HOST = process.env.HOST || "127.0.0.1";
 
-    app.listen(PORT, HOST, () =>
-      console.log(`Server running on http://${HOST}:${PORT}`)
-    );
+    const server = app.listen(PORT, HOST, () => {
+      printStartupBanner({ HOST, PORT });
+    });
 
-    // 4. Start Gmail polling engine
-    startPolling();
+    // 4. Register graceful shutdown handlers (SIGINT, SIGTERM, exceptions)
+    registerShutdownHandlers(server);
+
+    // 5. Start Gmail polling engine
+    if (process.env.SYNC_ENABLED !== "false") {
+      startPolling();
+    }
   });
 }
 

@@ -51,30 +51,15 @@ Mailpilot is an autonomous, privacy-focused email assistant and co-pilot for Gma
 git clone <repository-url>
 cd mailpilot-email-agent-main
 
-# Install server dependencies
-cd server
-npm install
-
-# Install frontend dependencies
-cd ../frontend
-npm install
-cd ..
+# Run automated idempotent setup (installs server & frontend dependencies and creates .env files)
+npm run setup
 ```
-*(Note: A root-level setup command `npm run setup` is scheduled in Batch 9).*
 
 ### 2. Configure Environment Files
 
-Copy the provided example files:
-
-```bash
-# Windows PowerShell
-copy server\.env.example server\.env
-copy frontend\.env.example frontend\.env
-
-# macOS / Linux
-cp server/.env.example server/.env
-cp frontend/.env.example frontend/.env
-```
+The setup script automatically copies `.env.example` templates to `server/.env` and `frontend/.env` if missing. Ensure your credentials are populated:
+- `server/.env`: Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `MONGO_URI`.
+- `frontend/.env`: Defaults to `VITE_API_URL=http://localhost:3000`.
 
 ### 3. Pull Required Ollama Models
 
@@ -94,29 +79,34 @@ Follow the [Google OAuth Setup](#google-oauth-setup) guide below, then fill in y
 
 ### 5. Start MongoDB
 
-Ensure your local MongoDB service is running:
+Start MongoDB locally or spin it up via Docker Compose:
 ```bash
-# Local service (Windows)
-net start MongoDB
+# Using Docker Compose (recommended)
+npm run db:up
 
-# Local service (macOS / Linux)
-brew services start mongodb-community
-# or: sudo systemctl start mongod
+# Or via local system services:
+# Windows: net start MongoDB
+# macOS:   brew services start mongodb-community
+# Linux:   sudo systemctl start mongod
 ```
-*(Docker Compose support via `docker compose up -d` will be available in Batch 9).*
 
-### 6. Start Application
+### 6. Verify System Health (Doctor)
 
-In terminal 1 (Backend):
+Run the automated diagnostic doctor to verify Node version, MongoDB reachability, Ollama models, and ports:
 ```bash
-cd server
+npm run doctor
+```
+
+### 7. Start Application
+
+Start both backend and frontend development servers concurrently with live reload:
+```bash
 npm run dev
 ```
 
-In terminal 2 (Frontend):
+Or run in production mode (automatically builds the frontend if needed and runs the server with frontend preview):
 ```bash
-cd frontend
-npm run dev
+npm start
 ```
 
 Open your browser at **`http://localhost:5173`** and click **Sign in with Google**.
@@ -495,17 +485,25 @@ mailpilot-email-agent-main/
 
 Run the full backend test suite:
 ```bash
-npm --prefix server test
+npm test
+# Or: npm --prefix server test
 ```
 
 Verify that environment variables match code and documentation:
 ```bash
-npm --prefix server run check:env
+npm run check:env
+# Or: npm --prefix server run check:env
 ```
 
 Build the frontend client for production:
 ```bash
-npm --prefix frontend run build
+npm run build
+# Or: npm --prefix frontend run build
+```
+
+Run environment and service diagnostics:
+```bash
+npm run doctor
 ```
 
 ### Commit & Branch Conventions

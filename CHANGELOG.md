@@ -4,6 +4,21 @@ All notable changes to Mailpilot are documented in this file, organized chronolo
 
 ---
 
+## [Batch 9] – Local Install Experience, Root Scripts & Process Hygiene
+
+### Added
+- **Root `package.json`**: Private package with Node >= 20 engine constraint orchestrating server and frontend workflows via `concurrently`.
+- **Automated Idempotent Setup (`npm run setup`)**: Cross-platform script `scripts/setup.js` creating `server/.env` and `frontend/.env` without overwriting existing configurations, executing `npm ci`/`npm install` appropriately, and outputting onboarding checklists.
+- **System Doctor Diagnostic CLI (`npm run doctor`)**: Implemented `server/tools/doctor.js` running non-destructive checks for Node version, MongoDB reachability (5s timeout), Ollama reachability and required models with exact pull commands, Google OAuth credentials, redirect URI registration, port availability (3000 & 5173), and Gmail API DNS resolution (verbatim vs ipv4first). Outputs structured PASS/WARN/FAIL status table without leaking secrets.
+- **Graceful Shutdown**: Added signal handling (SIGINT, SIGTERM) in `server/services/shutdown.service.js` that halts the cron scheduler, terminates active SSE streams, drains in-flight email processing (up to 10s with claim-first deduplication safety), closes the MongoDB connection, and supports immediate forced termination on repeat signals. Added unhandled rejection and uncaught exception handlers that log a single line and exit non-zero after resource cleanup.
+- **Startup Banner & Database Timeout**: Added clean terminal banner showing version, URLs, models, and sync state. Added 5s connection timeout to MongoDB with actionable hints (`npm run db:up`).
+- **Production Startup Coordinator (`npm start`)**: Created `scripts/start.js` verifying the frontend production bundle before launching Vite preview and the API server concurrently.
+- **Docker Compose (`docker-compose.yml`)**: MongoDB container (`mongo:7`) bound strictly to `127.0.0.1:27017` with named volume `mongo_data` and healthcheck. Root commands `npm run db:up` and `npm run db:down`.
+- **Repo Hygiene & Tooling**: Added `.gitattributes` (`* text=auto`), `.editorconfig`, `.nvmrc` (Node 22), `start-mailpilot.bat`, and `start-mailpilot.sh`.
+- **GitHub Actions CI (`.github/workflows/ci.yml`)**: Automated CI pipeline running tests, environment checks (`check:env`), and frontend production build on Node 22 without requiring live MongoDB.
+
+---
+
 ## [Batch 8] – Documentation, Calibration & Environment Tooling
 
 ### Added
@@ -135,3 +150,4 @@ All notable changes to Mailpilot are documented in this file, organized chronolo
 - **Primary Category Filter**: Focused sync exclusively on `category:primary`.
 - **Loop Protection & Daily Cap**: Added safety guards against automated reply loops.
 - **Ollama Startup Health Check**: Validated local model availability upon server start.
+

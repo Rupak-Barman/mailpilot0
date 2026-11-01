@@ -72,6 +72,7 @@ export const checkOllamaHealth = async () => {
         console.error(`  - Missing: ${m}`);
         console.error(`    Run: ollama pull ${m}`);
       }
+      console.error("  AI Engine Status: AI OFFLINE (server running in fallback mode; items will route to Failed tab)");
       console.error("=======================================================\n");
       return { reachable: true, missingModels: missing };
     }
@@ -88,6 +89,7 @@ export const checkOllamaHealth = async () => {
     console.error("Required models:");
     console.error(`  ollama pull ${llmModel}`);
     console.error(`  ollama pull ${embeddingModel}`);
+    console.error("  AI Engine Status: AI OFFLINE (server running in fallback mode; items will route to Failed tab)");
     console.error("=======================================================\n");
     return { reachable: false, missingModels: [llmModel, embeddingModel] };
   }

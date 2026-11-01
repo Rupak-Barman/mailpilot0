@@ -1,0 +1,24 @@
+{
+  "name": "mailpilot-root",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.js",
+    "dev": "concurrently -n \"server,frontend\" -c \"blue,magenta\" \"npm run dev --prefix server\" \"npm run dev --prefix frontend\"",
+    "start": "node scripts/start.js",
+    "build": "npm run build --prefix frontend",
+    "test": "npm test --prefix server",
+    "migrate": "node server/tools/migrate-email-actions.js",
+    "migrate:dry": "node server/tools/migrate-email-actions.js --dry-run",
+    "doctor": "npm run doctor --prefix server",
+    "check:env": "npm run check:env --prefix server",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
