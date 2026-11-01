@@ -17,7 +17,8 @@ import {
   formatRecipientList,
   isValidEmail,
 } from "../utils/helpers.js";
-import { generateEmailAnalysis } from "../services/aiEngine.js";
+import { generateEmailAnalysis, LLM_MODEL } from "../services/aiEngine.js";
+import { generateAiAssist } from "../services/aiAssist.service.js";
 import { publishUserEvent } from "../services/events.service.js";
 import { reconcileTurn } from "../services/reconcile.service.js";
 
@@ -713,15 +714,23 @@ export const handleSendDraft = async (req, res) => {
 
     await action.save();
 
-    // Update ProcessedEmail whenever a draft is sent (sentAt, resolution "ai_draft_sent")
+    // Update ProcessedEmail whenever a draft is sent
     const targetMessageId = draftTurn?.incomingMessageId || action.sourceMessageId;
     if (targetMessageId) {
+      const isAiAssisted = draftTurn?.outgoing?.generation?.mode === "user_assisted";
+      const existingProc = await ProcessedEmail.findOne({
+        userId: String(req.user.id),
+        messageId: targetMessageId
+      });
+      const wasFailed = existingProc && (existingProc.outcome === "failed" || existingProc.outcome === "needs_manual");
+      const resolution = (isAiAssisted || wasFailed) ? "ai_assisted" : "ai_draft_sent";
+
       await ProcessedEmail.findOneAndUpdate(
         { userId: String(req.user.id), messageId: targetMessageId },
         {
           $set: {
             sentAt: now,
-            resolution: "ai_draft_sent",
+            resolution,
             resolvedAt: now,
           },
         },
@@ -901,6 +910,7 @@ export const handleManualSend = async (req, res) => {
 
     const targetMessageId = latestTurn?.incomingMessageId || action.sourceMessageId;
     if (targetMessageId) {
+      const isAiAssisted = req.body?.isAiAssisted || latestTurn?.outgoing?.generation?.mode === "user_assisted";
       await ProcessedEmail.findOneAndUpdate(
         { userId: String(req.user.id), messageId: targetMessageId },
         {
@@ -909,7 +919,7 @@ export const handleManualSend = async (req, res) => {
             outcome: "sent",
             sentAt: now,
             resolvedAt: now,
-            resolution: "manual"
+            resolution: isAiAssisted ? "ai_assisted" : "manual"
           }
         }
       ).catch((err) => console.warn("[manual-send] Failed to update ProcessedEmail:", err.message));
@@ -1083,6 +1093,182 @@ export const handleTryAiDraft = async (req, res) => {
 
 router.post("/:id/try-ai-draft", auth, handleTryAiDraft);
 
+export const activeAssistRequests = new Set();
+
+export const handleAiAssist = async (req, res) => {
+  const { id } = req.params;
+  const {
+    turnId,
+    mode,
+    instruction = "",
+    useKnowledge = true,
+    currentBody = "",
+    versionId
+  } = req.body || {};
+
+  // Validate mode
+  if (!mode || (mode !== "compose" && mode !== "revise")) {
+    return res.status(400).json({ message: "Mode must be 'compose' or 'revise'" });
+  }
+
+  // Validate instruction
+  if (typeof instruction !== "string" || instruction.length > 1000) {
+    return res.status(400).json({ message: "Instruction must be a string of at most 1000 characters" });
+  }
+  if (mode === "revise" && !instruction.trim()) {
+    return res.status(400).json({ message: "Instruction is required for revise mode" });
+  }
+
+  // Validate currentBody
+  if (typeof currentBody !== "string" || currentBody.length > 20000) {
+    return res.status(400).json({ message: "Current body must be a string of at most 20000 characters" });
+  }
+  if (mode === "revise" && !currentBody.trim()) {
+    return res.status(400).json({ message: "Current body is required for revise mode" });
+  }
+
+  const action = await EmailAction.findOne({ _id: id, userId: req.user.id });
+  if (!action) {
+    return res.status(404).json({ message: "Record not found" });
+  }
+
+  const turns = action.turns || [];
+  if (turns.length === 0) {
+    return res.status(409).json({ code: "stale_turn", message: "Turn is stale or no turns exist in this thread" });
+  }
+
+  const latestTurn = turns[turns.length - 1];
+  const latestTurnId = String(latestTurn.turnId || latestTurn._id || latestTurn.incomingMessageId || turns.length - 1);
+
+  if (turnId && String(turnId) !== latestTurnId && String(turnId) !== String(latestTurn.incomingMessageId)) {
+    return res.status(409).json({
+      code: "stale_turn",
+      message: "The turn is stale. A follow-up email has arrived or this turn was superseded."
+    });
+  }
+
+  // Check if turn was already sent or superseded
+  if (
+    latestTurn.outgoing?.status === "sent" ||
+    latestTurn.outgoing?.status === "sending" ||
+    latestTurn.outgoing?.status === "superseded"
+  ) {
+    return res.status(409).json({
+      code: "stale_turn",
+      message: "This turn has already been sent or superseded."
+    });
+  }
+
+  // Check versionId if provided
+  if (versionId && latestTurn.outgoing?.versions?.length > 0) {
+    const latestVersion = latestTurn.outgoing.versions[latestTurn.outgoing.versions.length - 1];
+    if (latestVersion && latestVersion.versionId && latestVersion.versionId !== versionId) {
+      return res.status(409).json({
+        code: "stale_turn",
+        message: "Draft version changed. Please refresh before revising."
+      });
+    }
+  }
+
+  // Validate mode matching turn
+  const isDraftTurn = latestTurn.outgoing?.kind === "draft" || latestTurn.outcome === "drafted";
+  if (mode === "compose" && isDraftTurn) {
+    return res.status(400).json({ message: "Turn is an existing draft. Use revise mode to edit." });
+  }
+  if (mode === "revise" && !isDraftTurn) {
+    return res.status(400).json({ message: "Turn is not an existing draft. Use compose mode to draft." });
+  }
+
+  // Concurrency guard: only one assist request per turn at a time
+  const requestKey = `${action._id}:${latestTurnId}`;
+  if (activeAssistRequests.has(requestKey)) {
+    return res.status(429).json({
+      message: "An AI assist request is already in progress for this turn. Please wait or cancel it."
+    });
+  }
+
+  activeAssistRequests.add(requestKey);
+
+  const abortController = new AbortController();
+  const handleClientClose = () => {
+    if (!res.writableEnded) {
+      abortController.abort();
+    }
+  };
+  req.on?.("close", handleClientClose);
+
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const result = await generateAiAssist({
+      user,
+      action,
+      turn: latestTurn,
+      mode,
+      instruction: instruction.trim(),
+      useKnowledge: Boolean(useKnowledge),
+      currentBody,
+      signal: abortController.signal
+    });
+
+    if (result.status === "no_knowledge") {
+      return res.json({
+        status: "no_knowledge",
+        notices: result.notices || [],
+        bestDistance: result.bestDistance ?? null,
+        chunkCount: 0,
+        usedKnowledge: true,
+        message: "No matching knowledge found in attached documents under distance threshold."
+      });
+    }
+
+    return res.json({
+      body: result.body,
+      usedKnowledge: result.usedKnowledge,
+      sources: result.sources || [],
+      chunkCount: result.chunkCount || 0,
+      bestDistance: result.bestDistance ?? null,
+      ungrounded: Boolean(result.ungrounded),
+      notices: result.notices || [],
+      versionId: result.versionId,
+      framing: result.framing
+    });
+  } catch (error) {
+    if (abortController.signal.aborted || error.name === "AbortError") {
+      if (!res.writableEnded) {
+        return res.status(499).json({ message: "Request was cancelled by client" });
+      }
+      return;
+    }
+    if (error.code === "invalid_output" || error.status === 422) {
+      return res.status(422).json({
+        code: "invalid_output",
+        message: error.message || "Generated text failed output validation",
+        currentDraftUnchanged: true
+      });
+    }
+    if (error.code === "ai_unavailable" || error.status === 503) {
+      return res.status(503).json({
+        code: "ai_unavailable",
+        message: "Local AI engine (Ollama) is unavailable or timed out. Please check that Ollama is running and retry.",
+        retryHint: "Ensure `ollama serve` is running with the required model."
+      });
+    }
+    console.error("AI Assist error:", error);
+    return res.status(500).json({
+      message: error.message || "Failed to generate AI assist result"
+    });
+  } finally {
+    req.off?.("close", handleClientClose);
+    activeAssistRequests.delete(requestKey);
+  }
+};
+
+router.post("/:id/ai-assist", auth, handleAiAssist);
+
 router.patch("/:id/check", auth, async (req, res) => {
   const checked = req.body.checked !== false;
 
@@ -1113,7 +1299,7 @@ router.patch("/:id/check", auth, async (req, res) => {
 });
 
 // Update a draft in Gmail and synchronize its MongoDB record.
-router.patch("/:id", auth, async (req, res) => {
+export const handleUpdateDraft = async (req, res) => {
   try {
     const { to, cc, bcc, subject, body } = req.body;
 
@@ -1187,31 +1373,36 @@ router.patch("/:id", auth, async (req, res) => {
       });
     }
 
-    // Determine the latest turn containing a draft
+    // Determine the latest turn containing a draft or failed/needs_manual turn
+    const turns = action.turns || [];
+    const latestTurn = turns.length > 0 ? turns[turns.length - 1] : null;
     let draftTurn = null;
-    if (Array.isArray(action.turns) && action.turns.length > 0) {
-      const lastTurn = action.turns[action.turns.length - 1];
-      if (lastTurn && lastTurn.outgoing && lastTurn.outgoing.kind === "draft") {
-        draftTurn = lastTurn;
-      }
+    if (latestTurn && latestTurn.outgoing && latestTurn.outgoing.kind === "draft") {
+      draftTurn = latestTurn;
     }
 
-    const isDraft = action.type === "draft" || (draftTurn && draftTurn.outgoing?.kind === "draft");
-    if (!isDraft) {
+    const isFailedOrNeedsManual =
+      latestTurn &&
+      (latestTurn.outcome === "failed" ||
+        latestTurn.outcome === "needs_manual" ||
+        !latestTurn.outgoing?.gmailDraftId);
+
+    const isDraft = action.type === "draft" || Boolean(draftTurn);
+    if (!isDraft && !isFailedOrNeedsManual) {
       return res.status(400).json({
-        message: "Only drafts can be edited",
+        message: "Only drafts or items needing manual reply can be edited",
       });
     }
 
     const currentStatus = draftTurn ? draftTurn.outgoing.status : action.status;
-    if (currentStatus !== "draft") {
+    if (draftTurn && currentStatus !== "draft") {
       return res.status(409).json({
         message: "Only unsent drafts can be edited",
       });
     }
 
-    const draftId = draftTurn?.outgoing?.gmailDraftId || action.gmailDraftId;
-    if (!draftId) {
+    let draftId = draftTurn?.outgoing?.gmailDraftId || action.gmailDraftId;
+    if (!isFailedOrNeedsManual && !draftId) {
       return res.status(400).json({
         message: "Gmail draft ID is missing",
       });
@@ -1225,38 +1416,135 @@ router.patch("/:id", auth, async (req, res) => {
       });
     }
 
-    const gmail = await getGmail(user);
+    const targetCc = parsedCc !== undefined ? parsedCc : (draftTurn?.outgoing?.cc || latestTurn?.outgoing?.cc || []);
+    const targetBcc = parsedBcc !== undefined ? parsedBcc : (draftTurn?.outgoing?.bcc || latestTurn?.outgoing?.bcc || []);
+    const turnGmailThreadId = latestTurn?.gmailThreadId || action.threadId;
 
-    const targetCc = parsedCc !== undefined ? parsedCc : draftTurn?.outgoing?.cc;
-    const targetBcc = parsedBcc !== undefined ? parsedBcc : draftTurn?.outgoing?.bcc;
+    let updatedDraft;
+    let createdNewDraft = false;
 
-    // Update the real Gmail draft first.
-    const updatedDraft = await updateGmailDraft(gmail, {
-      gmailDraftId: draftId,
-      to: parsedTo,
-      cc: targetCc,
-      bcc: targetBcc,
-      subject: subject.trim(),
-      body,
-      threadId: action.threadId,
-      userEmail: user.email,
-    });
+    if (isFailedOrNeedsManual && !draftId) {
+      // Create new draft in turn's gmailThreadId
+      const inReplyTo = latestTurn?.rfcMessageId || latestTurn?.inReplyToHeader;
+      const references =
+        [latestTurn?.referencesHeader, latestTurn?.rfcMessageId].filter(Boolean).join(" ") || undefined;
+      const raw = buildMimeMessage({
+        to: parsedTo,
+        cc: targetCc,
+        bcc: targetBcc,
+        subject: subject.trim(),
+        body,
+        inReplyTo,
+        references,
+        isReply: true,
+        userEmail: user.email,
+      });
+
+      const draftResult = await withGmail(
+        user,
+        async (gmail) => {
+          return await gmail.users.drafts.create({
+            userId: "me",
+            requestBody: {
+              message: {
+                raw,
+                threadId: turnGmailThreadId,
+              },
+            },
+          });
+        },
+        user
+      );
+
+      updatedDraft = draftResult.data || {};
+      draftId = updatedDraft.id;
+      createdNewDraft = true;
+    } else {
+      const gmail = await getGmail(user);
+      // Update the real Gmail draft
+      updatedDraft = await updateGmailDraft(gmail, {
+        gmailDraftId: draftId,
+        to: parsedTo,
+        cc: targetCc,
+        bcc: targetBcc,
+        subject: subject.trim(),
+        body,
+        threadId: action.threadId,
+        userEmail: user.email,
+      });
+    }
 
     // Synchronize latest turn if present
-    if (draftTurn) {
-      draftTurn.outgoing.to = parsedTo;
-      if (targetCc !== undefined) draftTurn.outgoing.cc = targetCc;
-      if (targetBcc !== undefined) draftTurn.outgoing.bcc = targetBcc;
-      draftTurn.outgoing.subject = subject.trim();
-      draftTurn.outgoing.body = body;
-      draftTurn.from = formattedTo;
-      draftTurn.incomingSubject = subject.trim();
+    const prevBody = latestTurn?.outgoing?.body;
+    const { generation, version } = req.body || {};
+
+    if (latestTurn) {
+      latestTurn.outcome = "drafted";
+      latestTurn.failureReason = null;
+      if (!latestTurn.outgoing) {
+        latestTurn.outgoing = {
+          kind: "draft",
+          status: "draft",
+        };
+      }
+      latestTurn.outgoing.kind = "draft";
+      latestTurn.outgoing.status = "draft";
+      latestTurn.outgoing.to = parsedTo;
+      if (targetCc !== undefined) latestTurn.outgoing.cc = targetCc;
+      if (targetBcc !== undefined) latestTurn.outgoing.bcc = targetBcc;
+      latestTurn.outgoing.subject = subject.trim();
+      latestTurn.outgoing.body = body;
+      latestTurn.outgoing.gmailDraftId = draftId;
+      latestTurn.from = formattedTo;
+      latestTurn.incomingSubject = subject.trim();
       if (updatedDraft.message?.id) {
-        draftTurn.outgoing.gmailMessageId = updatedDraft.message.id;
+        latestTurn.outgoing.gmailMessageId = updatedDraft.message.id;
+      }
+
+      // Store generation metadata
+      if (generation) {
+        latestTurn.outgoing.generation = {
+          mode: generation.mode || "user_assisted",
+          model: generation.model || LLM_MODEL,
+          instruction: generation.instruction || "",
+          useKnowledge: Boolean(generation.useKnowledge),
+          ungrounded: Boolean(generation.ungrounded),
+          sources: generation.sources || [],
+          framing: generation.framing || null,
+          at: new Date(),
+        };
+      }
+
+      // Keep versions[] (max 10)
+      if (!Array.isArray(latestTurn.outgoing.versions)) {
+        latestTurn.outgoing.versions = [];
+      }
+      if (version && version.versionId) {
+        latestTurn.outgoing.versions.push({
+          versionId: version.versionId,
+          body,
+          at: new Date(),
+          source: version.source || "ai_revision",
+          instruction: version.instruction || "",
+          useKnowledge: Boolean(version.useKnowledge),
+        });
+      } else if (prevBody && prevBody !== body) {
+        latestTurn.outgoing.versions.push({
+          versionId: new mongoose.Types.ObjectId().toString(),
+          body,
+          at: new Date(),
+          source: "manual_edit",
+        });
+      }
+      if (latestTurn.outgoing.versions.length > 10) {
+        latestTurn.outgoing.versions = latestTurn.outgoing.versions.slice(-10);
       }
     }
 
     // Synchronize MongoDB top-level record with the edited content.
+    action.type = "draft";
+    action.status = "draft";
+    action.gmailDraftId = draftId;
     action.to = formattedTo;
     if (targetCc !== undefined) action.cc = formatRecipientList(targetCc);
     if (targetBcc !== undefined) action.bcc = formatRecipientList(targetBcc);
@@ -1269,6 +1557,18 @@ router.patch("/:id", auth, async (req, res) => {
     }
 
     await action.save();
+
+    if (createdNewDraft) {
+      const targetMessageId = latestTurn?.incomingMessageId || action.sourceMessageId;
+      if (targetMessageId) {
+        await ProcessedEmail.findOneAndUpdate(
+          { userId: String(req.user.id), messageId: targetMessageId },
+          { $set: { status: "done", outcome: "drafted" } }
+        ).catch((err) =>
+          console.warn("[PATCH /:id] Failed to update ProcessedEmail:", err.message)
+        );
+      }
+    }
 
     publishUserEvent(req.user.id, {
       type: "emailAction.changed",
@@ -1312,7 +1612,9 @@ router.patch("/:id", auth, async (req, res) => {
       message: "Could not update the Gmail draft",
     });
   }
-});
+};
+
+router.patch("/:id", auth, handleUpdateDraft);
 
 // Delete the Gmail draft and its MongoDB record.
 export const handleDeleteDraft = async (req, res) => {

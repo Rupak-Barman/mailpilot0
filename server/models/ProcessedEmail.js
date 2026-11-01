@@ -50,7 +50,7 @@ const ProcessedEmailSchema = new mongoose.Schema(
     },
     resolution: {
       type: String,
-      enum: ["ai_draft_sent", "ai_reply_sent", "manual", "none"],
+      enum: ["ai_draft_sent", "ai_reply_sent", "manual", "ai_assisted", "none"],
       default: null
     }
   },

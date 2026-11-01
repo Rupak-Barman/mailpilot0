@@ -151,12 +151,21 @@ export async function generateDocumentEmbedding(
   return embedding;
 }
 
+let embeddingMock = null;
+
+export function setEmbeddingMock(fn) {
+  embeddingMock = fn;
+}
+
 /**
  * Generates an embedding for a retrieval query.
  *
  * Used when searching the RAG knowledge base.
  */
 export async function generateQueryEmbedding(text) {
+  if (embeddingMock) {
+    return embeddingMock(text);
+  }
   if (!text?.trim()) {
     throw new Error("Query text cannot be empty");
   }

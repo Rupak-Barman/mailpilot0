@@ -14,7 +14,7 @@ const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434"
 ).replace(/\/+$/, "");
 
-const LLM_MODEL =
+export const LLM_MODEL =
   process.env.OLLAMA_LLM_MODEL || "qwen2.5:7b";
 
 const RAG_MAX_DISTANCE =
@@ -91,7 +91,8 @@ const parseJson = (text) => {
 /**
  * Generate a response using local Qwen through Ollama.
  */
-async function generateLocalResponse(prompt, extraOptions = {}) {
+export async function generateLocalResponse(prompt, extraOptions = {}) {
+  const signal = extraOptions.signal || AbortSignal.timeout(180000);
   const response = await fetch(
     `${OLLAMA_BASE_URL}/api/chat`,
     {
@@ -117,7 +118,7 @@ async function generateLocalResponse(prompt, extraOptions = {}) {
           ...extraOptions,
         },
       }),
-      signal: AbortSignal.timeout(180000),
+      signal,
     }
   );
 

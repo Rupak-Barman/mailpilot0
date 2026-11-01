@@ -50,6 +50,7 @@ export const handleGetAnalytics = async (req, res) => {
       failed,
       needsManual,
       resolvedManually,
+      aiAssisted,
       draftsPending,
       unchecked,
       labelAgg,
@@ -77,10 +78,17 @@ export const handleGetAnalytics = async (req, res) => {
       // Needs manual resolution
       ProcessedEmail.countDocuments({ ...baseFilter, outcome: "needs_manual" }),
 
-      // Resolved manually (using resolvedAt in range, never from EmailAction turns)
+      // Resolved manually (using resolvedAt in range; includes manual and ai_assisted)
       ProcessedEmail.countDocuments({
         userId,
-        resolution: "manual",
+        resolution: { $in: ["manual", "ai_assisted"] },
+        resolvedAt: dateRange
+      }),
+
+      // Resolved via AI assist
+      ProcessedEmail.countDocuments({
+        userId,
+        resolution: "ai_assisted",
         resolvedAt: dateRange
       }),
 
@@ -160,6 +168,7 @@ export const handleGetAnalytics = async (req, res) => {
       failed,
       needsManual,
       resolvedManually,
+      aiAssisted,
       draftsPending,
       unchecked,
       labels

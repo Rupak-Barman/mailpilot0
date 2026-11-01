@@ -45,6 +45,8 @@ describe("BATCH 5: Analytics Accuracy with ProcessedEmail as Source of Truth", (
       if (filter.outcome === "sent") return 4;
       if (filter.outcome === "failed") return 2;
       if (filter.outcome === "needs_manual") return 1;
+      if (filter.resolution && filter.resolution.$in) return 3;
+      if (filter.resolution === "ai_assisted") return 1;
       if (filter.resolution === "manual") return 2;
       // totalProcessed
       return 15;
@@ -111,7 +113,8 @@ describe("BATCH 5: Analytics Accuracy with ProcessedEmail as Source of Truth", (
     assert.equal(data.totals.sent, 4);
     assert.equal(data.totals.failed, 2);
     assert.equal(data.totals.needsManual, 1);
-    assert.equal(data.totals.resolvedManually, 2);
+    assert.equal(data.totals.resolvedManually, 3);
+    assert.equal(data.totals.aiAssisted, 1);
     assert.equal(data.totals.draftsPending, 3);
     assert.equal(data.totals.unchecked, 9);
 
@@ -123,10 +126,13 @@ describe("BATCH 5: Analytics Accuracy with ProcessedEmail as Source of Truth", (
     assert.ok(sentQuery, "Should query ProcessedEmail for outcome: sent");
     assert.ok(sentQuery.sentAt, "Should use sentAt date range for sent count");
 
-    // Verify resolved manually derives strictly from ProcessedEmail using resolvedAt filter
-    const manualQuery = countCalls.find((c) => c.resolution === "manual");
-    assert.ok(manualQuery, "Should query ProcessedEmail for resolution: manual");
-    assert.ok(manualQuery.resolvedAt, "Should use resolvedAt date range for manual resolution");
+    // Verify resolved manually derives strictly from ProcessedEmail using resolvedAt filter (includes ai_assisted)
+    const resolvedQuery = countCalls.find((c) => c.resolution && c.resolution.$in);
+    assert.ok(resolvedQuery, "Should query ProcessedEmail for resolution: { $in: ['manual', 'ai_assisted'] }");
+    assert.ok(resolvedQuery.resolvedAt, "Should use resolvedAt date range for manual resolution");
+
+    const aiAssistedQuery = countCalls.find((c) => c.resolution === "ai_assisted");
+    assert.ok(aiAssistedQuery, "Should query ProcessedEmail for resolution: ai_assisted");
 
     // Verify unchecked count in EmailAction does NOT filter by dateRange
     // (checked: false query has no createdAt / updatedAt)

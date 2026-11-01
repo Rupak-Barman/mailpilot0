@@ -88,6 +88,7 @@ describe("Data Models - User and ProcessedEmail additions", () => {
       "ai_draft_sent",
       "ai_reply_sent",
       "manual",
+      "ai_assisted",
       "none"
     ]);
   });

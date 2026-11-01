@@ -16,6 +16,10 @@ import {
   FiExternalLink,
   FiAlertTriangle,
   FiCpu,
+  FiRotateCcw,
+  FiClock,
+  FiCheck,
+  FiRefreshCw,
 } from "react-icons/fi";
 
 import { Button } from "../../components/common/Button";
@@ -23,6 +27,10 @@ import { Badge } from "../../components/common/Badge";
 import { formatDateTime, titleCase } from "../../utils/formatters";
 import { getFailureReasonLabel } from "./EmailActionTable";
 import { EmailChipInput, parseRawRecipients } from "../../components/common/EmailChipInput";
+import { AiAssistPanel } from "./AiAssistPanel";
+import { aiAssistAction } from "../../api/emailActions.api";
+import { useLabels } from "../../hooks/useLabels";
+import { useKnowledgeFiles } from "../../hooks/useKnowledge";
 
 export const EmailActionDetail = ({
   item,
@@ -208,6 +216,223 @@ const EmailActionDetailContent = ({
   const suggestedRecipients = parseRawRecipients(
     latestTurn?.outgoing?.suggestedCc || item.suggestedCc || []
   );
+
+  const { data: userLabelsData } = useLabels();
+  const { data: knowledgeFilesData } = useKnowledgeFiles();
+  const userLabels = userLabelsData?.labels || userLabelsData || [];
+  const knowledgeFiles = knowledgeFilesData?.files || knowledgeFilesData || [];
+
+  const [isAiAssisting, setIsAiAssisting] = useState(false);
+  const [aiAssistError, setAiAssistError] = useState(null);
+  const [aiAssistNotice, setAiAssistNotice] = useState(null);
+  const [assistPanelOpen, setAssistPanelOpen] = useState(false);
+  const [previewDraft, setPreviewDraft] = useState(null);
+  const [showVersionsMenu, setShowVersionsMenu] = useState(false);
+  const assistAbortRef = useRef(null);
+
+  const versions = latestTurn?.outgoing?.versions || [];
+
+  const getHeaderTitle = () => {
+    if (
+      latestTurn?.outcome === "failed" ||
+      latestTurn?.outcome === "needs_manual" ||
+      item.status === "failed" ||
+      item.type === "failed"
+    ) {
+      return "Needs your reply";
+    }
+    if (latestTurn?.outgoing?.kind === "draft" || item.type === "draft") {
+      return "Draft details";
+    }
+    if (latestTurn?.outgoing?.kind === "reply" || item.type === "reply") {
+      return "Reply details";
+    }
+    return "Draft details";
+  };
+
+  const handleAiAssistGenerate = async ({ instruction, useKnowledge }) => {
+    setIsAiAssisting(true);
+    setAiAssistError(null);
+    setAiAssistNotice(null);
+
+    const abortController = new AbortController();
+    assistAbortRef.current = abortController;
+
+    const isRevise = Boolean(
+      latestTurn?.outgoing?.kind === "draft" || item.type === "draft"
+    );
+    const mode = isRevise ? "revise" : "compose";
+    const currentBody = isRevise ? form.body : manualReplyText;
+
+    try {
+      const turnId =
+        latestTurn?.turnId ||
+        latestTurn?._id ||
+        latestTurn?.incomingMessageId ||
+        latestIndex;
+      const res = await aiAssistAction({
+        id: item._id,
+        turnId,
+        mode,
+        instruction,
+        useKnowledge,
+        currentBody,
+        versionId: previewDraft?.versionId,
+        signal: abortController.signal,
+      });
+
+      if (res.status === "no_knowledge") {
+        setAiAssistNotice(
+          res.notices?.[0] ||
+            "No matching knowledge found in attached documents. Try writing without knowledge base or adding key facts to your instruction."
+        );
+        return;
+      }
+
+      const previewObj = {
+        body: res.body,
+        usedKnowledge: res.usedKnowledge,
+        sources: res.sources || [],
+        chunkCount: res.chunkCount || 0,
+        bestDistance: res.bestDistance,
+        ungrounded: res.ungrounded,
+        notices: res.notices || [],
+        versionId: res.versionId,
+        previousBody: currentBody,
+        mode,
+        instruction,
+        framing: res.framing,
+      };
+
+      setPreviewDraft(previewObj);
+
+      // Update editor text immediately with preview
+      if (isRevise) {
+        setForm((prev) => ({ ...prev, body: res.body }));
+        setIsEditing(true);
+      } else {
+        setManualReplyText(res.body);
+      }
+    } catch (err) {
+      if (err.name === "CanceledError" || abortController.signal.aborted) {
+        return;
+      }
+      const data = err.response?.data;
+      setAiAssistError({
+        code: data?.code || err.code,
+        message: data?.message || err.message || "Failed to generate AI draft",
+      });
+    } finally {
+      setIsAiAssisting(false);
+      assistAbortRef.current = null;
+    }
+  };
+
+  const handleAiAssistCancel = () => {
+    if (assistAbortRef.current) {
+      assistAbortRef.current.abort();
+      assistAbortRef.current = null;
+    }
+    setIsAiAssisting(false);
+  };
+
+  const handleUsePreview = () => {
+    if (!previewDraft) return;
+    const isRevise = previewDraft.mode === "revise";
+
+    const generationPayload = {
+      mode: "user_assisted",
+      instruction: previewDraft.instruction,
+      useKnowledge: previewDraft.usedKnowledge,
+      ungrounded: previewDraft.ungrounded,
+      sources: previewDraft.sources,
+      framing: previewDraft.framing,
+    };
+
+    const versionPayload = {
+      versionId: previewDraft.versionId,
+      body: previewDraft.body,
+      source: isRevise ? "ai_revision" : "ai_initial",
+      instruction: previewDraft.instruction,
+      useKnowledge: previewDraft.usedKnowledge,
+    };
+
+    if (isRevise) {
+      onUpdateDraft(
+        {
+          id: item._id,
+          to: form.to,
+          cc: form.cc,
+          bcc: form.bcc,
+          subject: form.subject.trim(),
+          body: previewDraft.body,
+          generation: generationPayload,
+          version: versionPayload,
+        },
+        {
+          onSuccess: () => {
+            setPreviewDraft(null);
+            setAssistPanelOpen(false);
+          },
+        }
+      );
+    } else {
+      let draftSubject = latestTurn?.incomingSubject || item.subject || "";
+      if (!draftSubject.toLowerCase().startsWith("re:")) {
+        draftSubject = `Re: ${draftSubject.replace(/^re:\s*/i, "")}`.trim();
+      }
+
+      onUpdateDraft(
+        {
+          id: item._id,
+          to: manualTo,
+          cc: manualCc,
+          bcc: manualBcc,
+          subject: draftSubject,
+          body: previewDraft.body,
+          generation: generationPayload,
+          version: versionPayload,
+        },
+        {
+          onSuccess: () => {
+            setPreviewDraft(null);
+            setAssistPanelOpen(false);
+          },
+        }
+      );
+    }
+  };
+
+  const handleDiscardPreview = () => {
+    if (!previewDraft) return;
+    if (previewDraft.mode === "revise") {
+      setForm((prev) => ({ ...prev, body: previewDraft.previousBody }));
+    } else {
+      setManualReplyText(previewDraft.previousBody);
+    }
+    setPreviewDraft(null);
+  };
+
+  const handleReviseAgain = () => {
+    setPreviewDraft(null);
+    setAssistPanelOpen(true);
+  };
+
+  const handleUndo = () => {
+    if (versions.length > 1) {
+      const targetVersion = versions[versions.length - 2];
+      setForm((prev) => ({ ...prev, body: targetVersion.body }));
+      setIsEditing(true);
+    } else if (previewDraft) {
+      handleDiscardPreview();
+    }
+  };
+
+  const handleRestoreVersion = (ver) => {
+    setForm((prev) => ({ ...prev, body: ver.body }));
+    setIsEditing(true);
+    setShowVersionsMenu(false);
+  };
 
   const getUnaddedSuggested = (currentToList, currentCcList) => {
     const existingEmails = new Set([
@@ -456,7 +681,7 @@ const EmailActionDetailContent = ({
             </button>
 
             <h2 className="text-xl font-bold text-slate-950 dark:text-slate-50">
-              {titleCase(item.type || "Conversation")} Details
+              {getHeaderTitle()}
             </h2>
           </div>
 
@@ -924,11 +1149,143 @@ const EmailActionDetailContent = ({
                               />
                             </div>
 
+                            {/* Preview Banner for Revise Mode */}
+                            {previewDraft && previewDraft.mode === "revise" && (
+                              <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3 space-y-2 dark:border-indigo-800 dark:bg-indigo-950/40">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+                                      <FiCpu className="h-3 w-3" />
+                                      AI Revision Preview
+                                    </span>
+                                    {previewDraft.sources && previewDraft.sources.length > 0 && (
+                                      <span className="rounded-md bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-200">
+                                        Based on {previewDraft.sources.map((s) => s.docTitle).join(", ")} ({previewDraft.chunkCount} passages)
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5">
+                                    <Button
+                                      size="sm"
+                                      variant="success"
+                                      onClick={handleUsePreview}
+                                      disabled={isUpdatingDraft}
+                                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                    >
+                                      <FiCheck className="h-3.5 w-3.5 mr-1" />
+                                      {isUpdatingDraft ? "Saving..." : "Use this"}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={handleDiscardPreview}
+                                      disabled={isUpdatingDraft}
+                                    >
+                                      Discard
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      onClick={handleReviseAgain}
+                                      disabled={isUpdatingDraft}
+                                    >
+                                      <FiRefreshCw className="h-3 w-3 mr-1" />
+                                      Revise again
+                                    </Button>
+                                  </div>
+                                </div>
+
+                                {previewDraft.ungrounded && (
+                                  <div className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+                                    <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                                    <span>Ungrounded: check the facts</span>
+                                  </div>
+                                )}
+
+                                {previewDraft.notices && previewDraft.notices.length > 0 && (
+                                  <div className="space-y-1 text-xs text-indigo-900 dark:text-indigo-200">
+                                    {previewDraft.notices.map((n, i) => (
+                                      <p key={i} className="flex items-center gap-1.5">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
+                                        {n}
+                                      </p>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
                             {/* Body */}
                             <div className="space-y-1">
-                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                                Message:
-                              </label>
+                              <div className="flex items-center justify-between">
+                                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                  Message:
+                                </label>
+                                <div className="flex items-center gap-2">
+                                  {versions.length > 1 && (
+                                    <button
+                                      type="button"
+                                      onClick={handleUndo}
+                                      title="Undo to previous version"
+                                      className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+                                    >
+                                      <FiRotateCcw className="h-3 w-3" />
+                                      Undo
+                                    </button>
+                                  )}
+                                  {versions.length > 0 && (
+                                    <div className="relative">
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowVersionsMenu(!showVersionsMenu)}
+                                        className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+                                      >
+                                        <FiClock className="h-3 w-3" />
+                                        Versions ({versions.length})
+                                      </button>
+                                      {showVersionsMenu && (
+                                        <div className="absolute right-0 top-6 z-30 w-64 rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                                          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                            Revision History
+                                          </div>
+                                          <div className="max-h-48 overflow-y-auto space-y-1">
+                                            {versions
+                                              .slice()
+                                              .reverse()
+                                              .map((v, idx) => (
+                                                <button
+                                                  key={v.versionId || idx}
+                                                  type="button"
+                                                  onClick={() => handleRestoreVersion(v)}
+                                                  className="w-full text-left rounded-md p-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-800"
+                                                >
+                                                  <div className="flex items-center justify-between font-medium text-slate-800 dark:text-slate-200">
+                                                    <span>
+                                                      {v.source === "ai_initial"
+                                                        ? "Initial AI Draft"
+                                                        : v.source === "ai_revision"
+                                                        ? "AI Revision"
+                                                        : "Manual Edit"}
+                                                    </span>
+                                                    <span className="text-[10px] text-slate-400">
+                                                      {formatDateTime(v.at)}
+                                                    </span>
+                                                  </div>
+                                                  {v.instruction && (
+                                                    <p className="truncate text-[10px] text-slate-500 italic">
+                                                      "{v.instruction}"
+                                                    </p>
+                                                  )}
+                                                </button>
+                                              ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
                               <textarea
                                 name="body"
                                 value={form.body}
@@ -970,6 +1327,25 @@ const EmailActionDetailContent = ({
                                 Cancel
                               </Button>
                             </div>
+
+                            {/* Revise with AI panel inside editor */}
+                            {isLatest && (
+                              <div className="mt-3">
+                                <AiAssistPanel
+                                  mode="revise"
+                                  labelName={latestTurn?.label || item.label}
+                                  userLabels={userLabels}
+                                  knowledgeFiles={knowledgeFiles}
+                                  onGenerate={handleAiAssistGenerate}
+                                  onCancel={handleAiAssistCancel}
+                                  isLoading={isAiAssisting}
+                                  error={aiAssistError}
+                                  statusNotice={aiAssistNotice}
+                                  isOpen={assistPanelOpen}
+                                  onToggle={() => setAssistPanelOpen((prev) => !prev)}
+                                />
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div className="mt-2 space-y-2">
@@ -1189,6 +1565,73 @@ const EmailActionDetailContent = ({
                                 </div>
                               )}
 
+                              {/* Preview Banner for Compose Mode */}
+                              {previewDraft && previewDraft.mode === "compose" && (
+                                <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3 space-y-2 dark:border-indigo-800 dark:bg-indigo-950/40">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <span className="flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+                                        <FiCpu className="h-3 w-3" />
+                                        AI Draft Preview
+                                      </span>
+                                      {previewDraft.sources && previewDraft.sources.length > 0 && (
+                                        <span className="rounded-md bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-200">
+                                          Based on {previewDraft.sources.map((s) => s.docTitle).join(", ")} ({previewDraft.chunkCount} passages)
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5">
+                                      <Button
+                                        size="sm"
+                                        variant="success"
+                                        onClick={handleUsePreview}
+                                        disabled={isUpdatingDraft}
+                                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                      >
+                                        <FiCheck className="h-3.5 w-3.5 mr-1" />
+                                        {isUpdatingDraft ? "Saving..." : "Use this"}
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={handleDiscardPreview}
+                                        disabled={isUpdatingDraft}
+                                      >
+                                        Discard
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        onClick={handleReviseAgain}
+                                        disabled={isUpdatingDraft}
+                                      >
+                                        <FiRefreshCw className="h-3 w-3 mr-1" />
+                                        Revise again
+                                      </Button>
+                                    </div>
+                                  </div>
+
+                                  {previewDraft.ungrounded && (
+                                    <div className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+                                      <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                                      <span>Ungrounded: check the facts</span>
+                                    </div>
+                                  )}
+
+                                  {previewDraft.notices && previewDraft.notices.length > 0 && (
+                                    <div className="space-y-1 text-xs text-indigo-900 dark:text-indigo-200">
+                                      {previewDraft.notices.map((n, i) => (
+                                        <p key={i} className="flex items-center gap-1.5">
+                                          <span className="h-1.5 w-1.5 rounded-full bg-indigo-500"></span>
+                                          {n}
+                                        </p>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
                               <textarea
                                 value={manualReplyText}
                                 onChange={(e) => setManualReplyText(e.target.value)}
@@ -1198,34 +1641,36 @@ const EmailActionDetailContent = ({
                               />
 
                               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <Button
-                                    variant="success"
-                                    onClick={handleManualSend}
-                                    disabled={isBusy || !manualReplyText.trim()}
-                                  >
-                                    <FiSend className="h-3.5 w-3.5" />
-                                    {isManualSending ? "Sending..." : "Send Reply"}
-                                  </Button>
-
-                                  <Button
-                                    variant="secondary"
-                                    onClick={handleTryAiDraft}
-                                    disabled={isBusy}
-                                    title="Runs generation once with retrieval gate bypassed and creates an ungrounded draft"
-                                  >
-                                    <FiCpu className="h-3.5 w-3.5" />
-                                    {isTryingAiDraft ? "Generating Draft..." : "Try AI draft anyway"}
-                                  </Button>
-                                </div>
+                                <Button
+                                  variant="success"
+                                  onClick={handleManualSend}
+                                  disabled={isBusy || !manualReplyText.trim()}
+                                >
+                                  <FiSend className="h-3.5 w-3.5" />
+                                  {isManualSending ? "Sending..." : "Send Reply"}
+                                </Button>
                               </div>
 
                               {manualSendError && (
                                 <p className="mt-1 text-xs text-red-600">{manualSendError}</p>
                               )}
-                              {tryAiDraftError && (
-                                <p className="mt-1 text-xs text-red-600">{tryAiDraftError}</p>
-                              )}
+
+                              {/* Write with AI panel replaces Try AI draft button */}
+                              <div className="mt-3">
+                                <AiAssistPanel
+                                  mode="compose"
+                                  labelName={latestTurn?.label || item.label}
+                                  userLabels={userLabels}
+                                  knowledgeFiles={knowledgeFiles}
+                                  onGenerate={handleAiAssistGenerate}
+                                  onCancel={handleAiAssistCancel}
+                                  isLoading={isAiAssisting}
+                                  error={aiAssistError}
+                                  statusNotice={aiAssistNotice}
+                                  isOpen={assistPanelOpen}
+                                  onToggle={() => setAssistPanelOpen((prev) => !prev)}
+                                />
+                              </div>
                             </div>
                           )}
                         </div>

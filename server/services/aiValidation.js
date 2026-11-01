@@ -117,7 +117,9 @@ export function validateGeneratedBody({
   emailText = "",
   retrievedKnowledge = "",
   userProfile = "",
-  persona = ""
+  persona = "",
+  userInstruction = "",
+  currentDraft = ""
 } = {}) {
   if (!body || typeof body !== "string") {
     return {
@@ -178,7 +180,9 @@ export function validateGeneratedBody({
     emailText,
     retrievedKnowledge,
     userProfile,
-    persona
+    persona,
+    userInstruction,
+    currentDraft
   ].join(" ").toLowerCase();
 
   // (a) Prices: e.g. $49, $120.00, 50 USD, 100 dollars

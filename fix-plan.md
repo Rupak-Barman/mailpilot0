@@ -666,6 +666,36 @@ Email actions only supported single primary recipients (`to`), without CC or BCC
 
 ---
 
+## Batch 5.8 – AI-Assisted Drafting
+
+### Goal
+Replace the "Try AI draft anyway" button in the Failed view with a collapsible AI assist panel, and add the same panel for revising an existing draft in the Draft view. The user tells the AI what to write or change, chooses whether the AI must use the label's knowledge base (RAG) or not, and every revision starts from the CURRENT draft text.
+
+### Architecture & Endpoints
+- `POST /email-actions/:id/ai-assist`: Operates on latest turn only. Validates turn is latest and not sent, instruction <= 1000 chars, currentBody <= 20000 chars, mode matches turn. Checks concurrency (429) and stale turn (409). Supports client cancellation via `AbortController`.
+- `server/services/aiAssist.service.js`: Prompt design treating email, thread, and knowledge passages as untrusted data. Isolated user instruction block. JSON mode `{"body": string}`.
+- RAG: If `useKnowledge=true`, queries only knowledge documents attached to the turn's label with top-4 and `RAG_MAX_DISTANCE`. In compose mode, if no chunk passes, returns 200 `status: "no_knowledge"`. In revise mode, proceeds with notice. If `useKnowledge=false`, marks ungrounded and skips vector search.
+- Greeting and sign-off framing: In revise mode, strips framing before sending to model only when matching generated framing; re-adds framing afterwards. If edited by user, sends full text and skips injection.
+- Output validation: Batch 3 rules extended with user instruction and current draft in trusted context. Rejects invented specifics with 422 `invalid_output`.
+- Pure preview: assist endpoint never creates or sends Gmail drafts.
+- Saving ("Use this"): Uses existing draft endpoints (`PATCH /email-actions/:id`). Creates Gmail draft in turn's `gmailThreadId` if failed/needs_manual; updates draft if existing. Stores `outgoing.generation` metadata and manages `outgoing.versions[]` (capped at 10).
+- Analytics: `ProcessedEmail.resolution` supports `"ai_assisted"`, counted inside `resolvedManually` and returned separately as `aiAssisted`.
+- UI: Collapsible `AiAssistPanel` in Failed view and Draft view with quick chips, knowledge base toggle, preview banner with notices, ungrounded warning, sources badge, Use this, Discard, Revise again, Undo, and Versions menu. Details header derives from latest turn ("Draft details", "Reply details", "Needs your reply", never "None Details").
+
+### Test plan
+- [x] Revise sends current draft AND instruction to model with unsaved editor text.
+- [x] `useKnowledge=false` never calls searchKnowledge; `useKnowledge=true` retrieves from label's documents only.
+- [x] Compose + useKnowledge + no passing chunk returns `no_knowledge`; revise + no passing chunk proceeds with notice.
+- [x] Facts in user instruction pass validation; invented specifics return 422.
+- [x] Greeting/sign-off stripped and re-added when matching; preserved when customized.
+- [x] Prompt injection in email does not alter instructions.
+- [x] Stale turn returns 409; concurrent request returns 429; client cancel aborts.
+- [x] Assist call makes zero Gmail calls; "Use this" creates/updates draft in correct thread.
+- [x] Versions capped at 10, undo restores previous body.
+- [x] Analytics counts AI-assisted resolutions in `resolvedManually` and `aiAssisted`.
+
+---
+
 ## Batch 6 – Email MIME / Formatting Fixes
 
 ### Issues fixed
@@ -1089,6 +1119,16 @@ These tests must pass before marking the fix plan complete.
 - [x] 5.7.6 Frontend: reply editor shows To, Cc, Bcc (Cc/Bcc collapsed), email chips with validation & multi-address paste, "Add reply-all recipients", and sent-turn CC display
 - [x] 5.7.7 Frontend: Failed compose box includes To, Cc, Bcc, and "Add reply-all recipients"; Profile & Rules includes default CC; label form includes always CC
 - [x] 5.7.8 Comprehensive tests for headers, own-address removal, invalid address rejection, header injection, chips validation, and CC application in `server/tests/cc-bcc.test.js`
+
+### Batch 5.8 – AI-Assisted Drafting
+- [x] 5.8.1 Add `turnId`, `generation`, and `versions[]` to `EmailAction.js`; add `ai_assisted` to `ProcessedEmail.js` resolution enum
+- [x] 5.8.2 Create `server/services/aiAssist.service.js` with untrusted data isolation, RAG handling, JSON mode, framing stripping/re-adding, and validation
+- [x] 5.8.3 Implement `POST /email-actions/:id/ai-assist` with stale checks (409), concurrency guard (429), validation (422), cancel handling via AbortController, and no-knowledge status
+- [x] 5.8.4 Update `PATCH /email-actions/:id` to create drafts for failed turns via `withGmail` in turn's threadId, save `generation` metadata, and track versions (max 10)
+- [x] 5.8.5 Update `handleSendDraft` and `handleManualSend` to resolve as `ai_assisted` when appropriate; update `analytics.routes.js` to return `aiAssisted` and include in `resolvedManually`
+- [x] 5.8.6 Create `frontend/src/features/emailActions/AiAssistPanel.jsx` with quick chips, instruction input, knowledge base radio toggle, loading spinner, and cancel button
+- [x] 5.8.7 Update `EmailActionDetail.jsx` with preview banner (notices, ungrounded warning, sources, Use this, Discard, Revise again), Undo & Versions menu, and fix header title bug ("None Details" -> "Needs your reply" / "Draft details")
+- [x] 5.8.8 Write comprehensive mocked tests in `server/tests/ai-assist.test.js` covering all 10 requirements and update analytics tests
 
 ### Batch 6 – MIME / Formatting
 - [x] 6.1 76-char base64 wrapping

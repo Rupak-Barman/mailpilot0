@@ -39,10 +39,12 @@ export const updateEmailActionDraft = async ({
   bcc,
   subject,
   body,
+  generation,
+  version,
 }) => {
   const { data } = await apiClient.patch(
     `/email-actions/${id}`,
-    { to, cc, bcc, subject, body },
+    { to, cc, bcc, subject, body, generation, version },
   );
 
   return data;
@@ -65,10 +67,10 @@ export const updateEmailActionLabel = async ({ id, label }) => {
   return data;
 };
 
-export const manualSendEmailAction = async ({ id, body, to, cc, bcc, subject }) => {
+export const manualSendEmailAction = async ({ id, body, to, cc, bcc, subject, isAiAssisted }) => {
   const { data } = await apiClient.post(
     `/email-actions/${id}/manual-send`,
-    { body, to, cc, bcc, subject }
+    { body, to, cc, bcc, subject, isAiAssisted }
   );
 
   return data;
@@ -77,6 +79,25 @@ export const manualSendEmailAction = async ({ id, body, to, cc, bcc, subject }) 
 export const tryAiDraftAction = async ({ id }) => {
   const { data } = await apiClient.post(
     `/email-actions/${id}/try-ai-draft`
+  );
+
+  return data;
+};
+
+export const aiAssistAction = async ({
+  id,
+  turnId,
+  mode,
+  instruction,
+  useKnowledge,
+  currentBody,
+  versionId,
+  signal,
+}) => {
+  const { data } = await apiClient.post(
+    `/email-actions/${id}/ai-assist`,
+    { turnId, mode, instruction, useKnowledge, currentBody, versionId },
+    { signal }
   );
 
   return data;

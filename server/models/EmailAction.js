@@ -143,13 +143,53 @@ const OutgoingTurnSchema = new mongoose.Schema(
       default: false
     },
     inReplyTo: String,
-    references: String
+    references: String,
+    generation: {
+      mode: {
+        type: String,
+        default: null
+      },
+      model: String,
+      instruction: String,
+      useKnowledge: Boolean,
+      ungrounded: Boolean,
+      sources: [
+        {
+          docTitle: String
+        }
+      ],
+      framing: {
+        greeting: String,
+        signOff: String
+      },
+      at: Date
+    },
+    versions: [
+      {
+        versionId: String,
+        body: String,
+        at: {
+          type: Date,
+          default: Date.now
+        },
+        source: {
+          type: String,
+          enum: ["ai_initial", "ai_revision", "manual_edit"]
+        },
+        instruction: String,
+        useKnowledge: Boolean
+      }
+    ]
   },
   { _id: false }
 );
 
 const TurnSchema = new mongoose.Schema(
   {
+    turnId: {
+      type: String,
+      default: () => new mongoose.Types.ObjectId().toString()
+    },
     // Incoming side
     incomingMessageId: String,
     gmailThreadId: String,
@@ -254,12 +294,18 @@ EmailActionSchema.index({ "turns.rfcMessageId": 1 });
 
 EmailActionSchema.pre("init", function (doc) {
   if (doc && Array.isArray(doc.turns)) {
-    for (const turn of doc.turns) {
-      if (turn && turn.outgoing) {
-        turn.outgoing.to = normalizeRecipientList(turn.outgoing.to);
-        turn.outgoing.cc = normalizeRecipientList(turn.outgoing.cc);
-        turn.outgoing.bcc = normalizeRecipientList(turn.outgoing.bcc);
-        turn.outgoing.suggestedCc = normalizeRecipientList(turn.outgoing.suggestedCc);
+    for (let i = 0; i < doc.turns.length; i++) {
+      const turn = doc.turns[i];
+      if (turn) {
+        if (!turn.turnId) {
+          turn.turnId = turn._id?.toString() || turn.incomingMessageId || `turn-${i}`;
+        }
+        if (turn.outgoing) {
+          turn.outgoing.to = normalizeRecipientList(turn.outgoing.to);
+          turn.outgoing.cc = normalizeRecipientList(turn.outgoing.cc);
+          turn.outgoing.bcc = normalizeRecipientList(turn.outgoing.bcc);
+          turn.outgoing.suggestedCc = normalizeRecipientList(turn.outgoing.suggestedCc);
+        }
       }
     }
   }
