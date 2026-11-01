@@ -1,6 +1,7 @@
 /**
  * AI output validation and greeting/sign-off formatting utilities.
  */
+import { stripModelFraming } from "../utils/emailBody.js";
 
 /**
  * Extract sender's first name from RFC From header.
@@ -73,23 +74,7 @@ export function buildSignOff({ userName, tone = "friendly" } = {}) {
  * Remove any greeting or sign-off inadvertently written by the model.
  */
 export function stripGreetingsAndSignOffs(text) {
-  if (!text) return "";
-
-  let cleaned = text.trim();
-
-  // Strip leading greeting if model generated one
-  cleaned = cleaned.replace(
-    /^(?:hi|hello|dear|hey)\b[^\n,]*[,!]?\s*\n*/i,
-    ""
-  ).trim();
-
-  // Strip trailing sign-off if model generated one
-  cleaned = cleaned.replace(
-    /\n+(?:best regards|warm regards|kind regards|sincerely|regards|cheers|best|thanks|thank you)[^\n]*(?:\n+[^\n]+)?$/i,
-    ""
-  ).trim();
-
-  return cleaned;
+  return stripModelFraming(text);
 }
 
 /**

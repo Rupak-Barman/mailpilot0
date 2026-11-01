@@ -696,6 +696,39 @@ Replace the "Try AI draft anyway" button in the Failed view with a collapsible A
 
 ---
 
+### Investigation: AI Draft Paragraph Formatting & Model Framing Issue (Batch 5.8 & Batch 3)
+
+#### 1. Stage-by-Stage Trace Table
+
+Sample tested:
+`"Dear Rupak, My career goals are to excel in CSE engineering and build a successful business. I aim to leverage technology to innovate and solve complex problems. Sincerely, Rupak Barman"`
+
+| Stage | Case (a): Run-on (no newlines) | Case (b): Literal `\n` sequences | Case (c): Real `\n` newlines |
+|---|---|---|---|
+| **1. Raw Ollama Response** | `{"body": "Dear Rupak, My career goals... Sincerely, Rupak Barman"}` | `{"body": "Dear Rupak,\n\nMy career goals...\n\nSincerely,\nRupak Barman"}` | `{"body": "Dear Rupak,\n\nMy career goals...\n\nSincerely,\nRupak Barman"}` |
+| **2. After JSON Parsing** | One long string, 0 newline characters | String containing literal `\n` characters | String containing actual `\n` newlines |
+| **3. After Cleaning/Normalising** | Unchanged (no `\n` to convert) | `\n` converted to real newline `\n` | Real newlines normalized (`\r\n` -> `\n`) |
+| **4. Greeting / Sign-Off Stripping & Injection** | **STRUCTURE LOST:** `stripGreetingsAndSignOffs` regex strictly required `\n+` before sign-off closings (`/\n+(?:sincerely...)/`). In Case (a), `Sincerely, Rupak Barman` was preceded by a space, not `\n+`, so it was **NOT stripped**. Code then injected `Best regards,\nRupak Barman`, creating a double sign-off. Furthermore, in revise mode, `framingMatched` failed to match `Hi Rupak,`, misidentifying the model's `Dear Rupak` as a user edit and leaving the model framing completely untouched! | Model greeting stripped; model sign-off stripped (if preceded by `\n+`). Code greeting and sign-off injected. | Model greeting and sign-off stripped if preceded by `\n+`. Code greeting and sign-off injected. |
+| **5. API Response Body** | Body had 0 paragraph breaks; model sign-off remained embedded inside body text. | Preserved whatever paragraphs were emitted, but prompt contract `{"body": string}` rarely yielded multi-paragraph structure. | Preserved `\n\n` if model emitted them, but still lacked paragraph enforcement. |
+| **6. Frontend State & Textarea / Preview** | Textarea and read-only div display a single run-on block with no paragraph breaks. | Textarea rendered lines matching `\n`. | Textarea rendered lines matching `\n`. |
+| **7. Saved outgoing.body & Gmail MIME** | Plain text part lacked blank lines between body sentences. HTML part split on `/\n\s*\n/` resulted in length 1, creating a **single `<p>` tag** for the entire body text. | Plain text kept `\n\n`; HTML split into `<p>` elements. | Plain text kept `\n\n`; HTML split into `<p>` elements. |
+
+#### 2. Root Cause Analysis
+1. **Model Framing Regex Fragility:** `stripGreetingsAndSignOffs` in `aiValidation.js` required `\n+` before closings (`Sincerely`, `Best regards`, etc.). On run-on outputs without newlines, the sign-off regex failed completely.
+2. **Revise Framing Misdetection:** In revise mode, `framingMatched` only checked `startsWith(targetGreeting)` ("Hi Rupak,"). When the previous turn wrote `"Dear Rupak,"`, it evaluated to `false`, treating the model-written greeting as an intentional user customization and skipping stripping and injection.
+3. **Prompt Contract Shape:** Asking the model for `{"body": string}` allowed local LLMs (`qwen2.5:7b`) to collapse all text into a single paragraph.
+4. **Auto-Generation (Batch 3) Impact:** The Batch 3 auto-generation path (`aiEngine.js`) used the exact same prompt shape `{"body": string}` and same `stripGreetingsAndSignOffs` regex, suffering from the exact same single-paragraph collapse and unstripped sign-offs.
+
+#### 3. Shared Solution (`server/utils/emailBody.js`)
+- **Shared Module:** Exported `buildEmailBody({ greeting, paragraphs, signOff, name })` and `normalizeParagraphs(input)`.
+- **Structure:** Greeting line, blank line (`\n\n`), each paragraph separated by a blank line, blank line, sign-off line, newline, name line. Internal newlines use `\n`; MIME uses `\r\n`.
+- **Prompt Contract:** Both auto-generation (`aiEngine.js`) and AI assist (`aiAssist.service.js`) ask for JSON `{"paragraphs": ["...", "..."]}` (2 to 4 short paragraphs, plain text, no greeting, no sign-off, no name), with an example and `{"body": "..."}` fallback.
+- **Robust Normalization:** `normalizeParagraphs` converts literal `\n`/`\r\n` to real newlines, normalizes CRLF, splits on blank lines, trims each paragraph, collapses intra-paragraph spaces, and splits single paragraphs > ~240 chars (or 2-sentence run-ons) at sentence boundaries into 2 to 3 sentences without breaking abbreviations (`e.g.`, `Dr.`) or numbers (`3.5`).
+- **Framing Detection:** Model greetings and sign-offs are stripped even without newlines, while genuine user custom framing (e.g. "Good morning team," / "Cheers, Al") in revise mode is strictly preserved.
+- **Frontend & MIME:** Textareas and `whitespace-pre-wrap` divs preserve line breaks; MIME plain text preserves blank lines and HTML wraps each paragraph in `<p>` with HTML escaping.
+
+---
+
 ## Batch 6 – Email MIME / Formatting Fixes
 
 ### Issues fixed
@@ -1129,6 +1162,8 @@ These tests must pass before marking the fix plan complete.
 - [x] 5.8.6 Create `frontend/src/features/emailActions/AiAssistPanel.jsx` with quick chips, instruction input, knowledge base radio toggle, loading spinner, and cancel button
 - [x] 5.8.7 Update `EmailActionDetail.jsx` with preview banner (notices, ungrounded warning, sources, Use this, Discard, Revise again), Undo & Versions menu, and fix header title bug ("None Details" -> "Needs your reply" / "Draft details")
 - [x] 5.8.8 Write comprehensive mocked tests in `server/tests/ai-assist.test.js` covering all 10 requirements and update analytics tests
+- [x] 5.8.9 Fix AI draft paragraph formatting and model framing (`server/utils/emailBody.js`, prompt JSON `{"paragraphs": [...]}`, normalizeParagraphs sentence splitting & abbreviation protection, shared with Batch 3 auto-generation and AI assist)
+- [x] 5.8.10 Add comprehensive unit tests in `server/tests/email-body.test.js` covering normalizeParagraphs, abbreviations, revise framing, MIME decoded parts, and frontend line-break preservation
 
 ### Batch 6 – MIME / Formatting
 - [x] 6.1 76-char base64 wrapping

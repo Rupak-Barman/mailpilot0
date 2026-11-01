@@ -473,7 +473,7 @@ describe("BATCH 5.8: AI-Assisted Drafting (ai-assist)", () => {
     assert.equal(resMatch.statusCode, 200);
     // Sent prompt stripped the greeting and sign-off before sending
     const promptMatch = fetchCalls[0].body.messages[0].content;
-    assert.ok(promptMatch.includes("=== CURRENT DRAFT ===\nOriginal body.\n"));
+    assert.ok(promptMatch.includes("=== CURRENT DRAFT PARAGRAPHS ===\n[Paragraph 1]:\nOriginal body."));
     // Output has greeting and sign-off re-added
     assert.ok(resMatch.jsonData.body.startsWith("Hi Bob,\n\n"));
     assert.ok(resMatch.jsonData.body.endsWith("Best regards,\nAlex Doe"));

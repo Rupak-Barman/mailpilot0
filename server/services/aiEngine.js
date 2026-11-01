@@ -9,6 +9,7 @@ import {
   stripGreetingsAndSignOffs,
   validateGeneratedBody
 } from "./aiValidation.js";
+import { buildEmailBody, normalizeParagraphs } from "../utils/emailBody.js";
 
 const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434"
@@ -364,9 +365,7 @@ ${grounding === "strict" ? `SELECTED DOCUMENT CONTEXT:\n${retrievedKnowledge}\n`
 CRITICAL FORMATTING INSTRUCTIONS:
 1. Do NOT write any greeting (e.g. no "Hi", "Hello", "Dear").
 2. Do NOT write any sign-off or signature (e.g. no "Best regards", persona signature, or closing).
-3. Start immediately with the first paragraph of the response body.
-4. Structure the body in 1-3 concise paragraphs separated by empty lines.
-5. Do NOT use Markdown formatting (no asterisks, bold, or code blocks). Output pure plain text.
+3. Do NOT use Markdown formatting (no asterisks, bold, or code blocks). Output pure plain text.
 
 EMAIL FROM: ${from || ""}
 SUBJECT: ${subject || ""}
@@ -374,9 +373,16 @@ BODY:
 ${bodyText || snippet || ""}
 
 Return JSON ONLY matching this exact schema:
-{"can_answer": true, "body": "plain text body without greeting or sign-off"}
+{
+  "can_answer": boolean,
+  "paragraphs": ["...", "..."]
+}
+Requirements for paragraphs:
+- 2 to 4 short paragraphs, plain text, no greeting, no sign-off, no name.
+- Example:
+  {"can_answer": true, "paragraphs": ["Thank you for reaching out. We would be delighted to assist with your request.", "Our team will review the details and follow up with next steps by tomorrow."]}
 If you cannot answer without inventing facts:
-{"can_answer": false, "body": ""}`;
+{"can_answer": false, "paragraphs": []}`;
 
     const generated = await generateLocalResponse(prompt);
 
@@ -393,21 +399,22 @@ If you cannot answer without inventing facts:
       };
     }
 
-    let rawBody = String(generated?.body || "")
-      .replace(/\\n/g, "\n")
-      .replace(/\r\n/g, "\n")
-      .trim();
-
-    if (!rawBody && bypassRetrievalGate) {
-      rawBody = "Thank you for reaching out. We have received your message and will follow up shortly.";
+    let paragraphs = [];
+    if (Array.isArray(generated?.paragraphs) && generated.paragraphs.length > 0) {
+      paragraphs = normalizeParagraphs(generated.paragraphs);
+    } else if (generated?.body) {
+      paragraphs = normalizeParagraphs(generated.body);
     }
 
-    // Strip accidental greeting or sign-off from model text
-    const strippedBody = stripGreetingsAndSignOffs(rawBody);
+    if (paragraphs.length === 0 && bypassRetrievalGate) {
+      paragraphs = ["Thank you for reaching out. We have received your message and will follow up shortly."];
+    }
+
+    const bodyToValidate = paragraphs.join("\n\n");
 
     // Validate body
     const validation = validateGeneratedBody({
-      body: strippedBody,
+      body: bodyToValidate,
       emailText,
       retrievedKnowledge,
       userProfile: userProfileDescription,
@@ -428,10 +435,10 @@ If you cannot answer without inventing facts:
       };
     }
 
-    // Inject greeting and sign-off in code
+    // Inject greeting and sign-off in code via shared buildEmailBody
     const greeting = buildGreeting({ from, tone });
     const signOff = buildSignOff({ userName: userProfileName, tone });
-    const finalBody = `${greeting}\n\n${strippedBody}\n\n${signOff}`;
+    const finalBody = buildEmailBody({ greeting, paragraphs, signOff });
 
     return {
       label: selectedLabel.name,
