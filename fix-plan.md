@@ -539,15 +539,15 @@ server/scripts/
 ```
 
 ### Test plan
-- [ ] `node:test server/tests/helpers.test.js` passes with 0 failures.
-- [ ] Markdown stripping unit tests include:
+- [x] `node:test server/tests/helpers.test.js` passes with 0 failures.
+- [x] Markdown stripping unit tests include:
   - `"5 * 3 and 2 * 4"` (lone `*` untouched)
   - `"snake_case_name"` (`_` never touched)
   - `"john_smith_2@x.com"` (`_` in emails untouched)
   - `"**bold** text"` (stripped to `"bold text"`)
-- [ ] Verify produced MIME message has 76-char base64 lines.
-- [ ] Verify `In-Reply-To` header appears in draft uploaded to Gmail.
-- [ ] Send email with subject `undefined`; confirm no crash.
+- [x] Verify produced MIME message has 76-char base64 lines.
+- [x] Verify `In-Reply-To` header appears in draft uploaded to Gmail.
+- [x] Send email with subject `undefined`; confirm no crash.
 
 ---
 
@@ -847,12 +847,12 @@ These tests must pass before marking the fix plan complete.
 - [ ] 5.5 Write `server/tests/analytics.test.js`
 
 ### Batch 6 – MIME / Formatting
-- [ ] 6.1 76-char base64 wrapping
-- [ ] 6.2 Threading headers in `updateGmailDraft`
-- [ ] 6.3 Subject null guard
-- [ ] 6.4 Fix markdown strip regex
-- [ ] 6.5 Un-ignore `server/tests/` in `.gitignore`
-- [ ] 6.6 Write `server/tests/helpers.test.js`
+- [x] 6.1 76-char base64 wrapping
+- [x] 6.2 Threading headers in `updateGmailDraft`
+- [x] 6.3 Subject null guard
+- [x] 6.4 Fix markdown strip regex
+- [x] 6.5 Un-ignore `server/tests/` in `.gitignore`
+- [x] 6.6 Write `server/tests/helpers.test.js`
 
 ### Batch 7 – Security
 - [ ] 7.1 One-time code OAuth exchange (no JWT in URL)

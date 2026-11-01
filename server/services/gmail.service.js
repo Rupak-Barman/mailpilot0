@@ -75,13 +75,22 @@ export const setupDefaultLabels = async (user) => {
  */
 export const updateGmailDraft = async (
   gmail,
-  { gmailDraftId, to, subject, body, threadId },
+  { gmailDraftId, to, subject, body, threadId, inReplyTo, references, replyTo },
 ) => {
   if (!gmailDraftId) {
     throw new Error("Gmail draft ID is missing");
   }
 
-  const raw = buildMimeMessage({ to, subject, body, isReply: subject.startsWith("Re:") });
+  const isReply = (subject ?? "").startsWith("Re:");
+  const raw = buildMimeMessage({
+    to,
+    subject: subject ?? "",
+    body,
+    inReplyTo,
+    references,
+    replyTo,
+    isReply,
+  });
 
   const response = await gmail.users.drafts.update({
     userId: "me",

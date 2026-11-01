@@ -6,9 +6,42 @@ export const getHeader = (email, name) =>
   )?.value || "";
 
 /**
+ * Wraps a base64 string at 76 characters per line using CRLF (\r\n),
+ * per RFC 2045.
+ */
+export const wrapBase64 = (b64 = "") => {
+  if (!b64) return "";
+  return String(b64).replace(/(.{76})/g, "$1\r\n").trimEnd();
+};
+
+/**
+ * Strips markdown formatting (bold, italic, headers) safely.
+ * Rules:
+ * 1. Only strip a marker pair when the opening marker is followed by a non-space
+ *    and the closing marker is preceded by a non-space on the same line.
+ * 2. Never touch "_".
+ * 3. Do not remove lone "*".
+ * 4. Leave a literal "\n" alone unless it is an obvious model artefact (e.g. \n{3,}).
+ */
+export const stripMarkdown = (text) => {
+  if (!text) return "";
+  return String(text)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    // Strip bold/italic asterisks (*word* or **word**) only when non-space bounded on same line:
+    .replace(/(?<=^|[^\w*])(\*{1,2})(?!\s)([^\r\n*]+?)(?<!\s)\1(?=[^\w*]|$)/gm, "$2")
+    // Strip header hashes at line start:
+    .replace(/^#{1,6}\s+/gm, "")
+    // Collapse 3+ consecutive newlines to 2 (model artefact), but leave standard \n alone:
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+};
+
+/**
  * Builds a Gmail-compatible base64url-encoded multipart/alternative MIME message.
  * Supports both text/plain and text/html representations, UTF-8 encoding,
- * and RFC 2822 threading headers (In-Reply-To, References, Re: subject).
+ * 76-char base64 line wrapping (RFC 2045), and RFC 2822 threading headers
+ * (In-Reply-To, References, Reply-To, Re: subject).
  */
 export const buildMimeMessage = ({
   to,
@@ -17,6 +50,7 @@ export const buildMimeMessage = ({
   inReplyTo = "",
   references = "",
   isReply = false,
+  replyTo = "",
 }) => {
   const safeHeader = (value = "") =>
     String(value || "")
@@ -28,7 +62,7 @@ export const buildMimeMessage = ({
     throw new Error("Recipient email is required");
   }
 
-  let finalSubject = safeHeader(subject);
+  let finalSubject = safeHeader(subject ?? "");
   if (isReply && !/^re:/i.test(finalSubject)) {
     finalSubject = `Re: ${finalSubject}`;
   }
@@ -36,14 +70,7 @@ export const buildMimeMessage = ({
   const encodedSubject = `=?UTF-8?B?${Buffer.from(finalSubject, "utf8").toString("base64")}?=`;
 
   // Clean and normalize body text
-  const normalizedBody = String(body || "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/\\n/g, "\n")
-    .replace(/\*\*(.*?)\*\*/g, "$1") // strip bold
-    .replace(/\*(.*?)\*/g, "$1") // strip italic
-    .replace(/`/g, "") // strip backticks
-    .trim();
+  const normalizedBody = stripMarkdown(body);
 
   // Clean HTML markup with paragraph tags and proper line heights
   const paragraphs = normalizedBody.split(/\n\s*\n/).filter(Boolean);
@@ -75,22 +102,24 @@ export const buildMimeMessage = ({
 
   const safeInReplyTo = safeHeader(inReplyTo);
   const safeReferences = safeHeader(references);
+  const safeReplyTo = safeHeader(replyTo);
 
   if (safeInReplyTo) headers.push(`In-Reply-To: ${safeInReplyTo}`);
   if (safeReferences) headers.push(`References: ${safeReferences}`);
+  if (safeReplyTo) headers.push(`Reply-To: ${safeReplyTo}`);
 
   const plainPart = [
     'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: base64",
     "",
-    Buffer.from(normalizedBody, "utf8").toString("base64"),
+    wrapBase64(Buffer.from(normalizedBody, "utf8").toString("base64")),
   ].join("\r\n");
 
   const htmlPart = [
     'Content-Type: text/html; charset="UTF-8"',
     "Content-Transfer-Encoding: base64",
     "",
-    Buffer.from(htmlDocument, "utf8").toString("base64"),
+    wrapBase64(Buffer.from(htmlDocument, "utf8").toString("base64")),
   ].join("\r\n");
 
   const mimeMessage = [

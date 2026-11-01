@@ -16,7 +16,8 @@ frontend/.env.*
 *.key
 token.json
 credentials.json
-server/scripts/
+!server/tests/
+!server/tools/
 # ==============================================================================
 # Dependencies
 # ==============================================================================

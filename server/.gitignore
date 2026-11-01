@@ -30,4 +30,5 @@ Thumbs.db
 *.swp
 *.swo
 
-server/scripts/
+!tests/
+!tools/
