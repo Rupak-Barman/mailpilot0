@@ -335,8 +335,17 @@ export const updateGmailDraft = async (
 /**
  * Send an existing Gmail draft.
  */
-export const sendGmailDraft = async (gmailOrUser, gmailDraftId, maybeUser) => {
-  if (!gmailDraftId) {
+export const sendGmailDraft = async (
+  gmailOrUser,
+  draftIdOrParams,
+  maybeUser
+) => {
+  const draftId =
+    typeof draftIdOrParams === "object"
+      ? draftIdOrParams?.gmailDraftId || draftIdOrParams?.id
+      : draftIdOrParams;
+
+  if (!draftId) {
     throw new Error("Gmail draft ID is missing");
   }
 
@@ -346,7 +355,7 @@ export const sendGmailDraft = async (gmailOrUser, gmailDraftId, maybeUser) => {
       const response = await gmail.users.drafts.send({
         userId: "me",
         requestBody: {
-          id: gmailDraftId
+          id: draftId
         }
       });
       return response.data;
@@ -395,10 +404,15 @@ export const sendGmailMessage = async (
  */
 export const deleteGmailDraft = async (
   gmailOrUser,
-  gmailDraftId,
+  draftIdOrParams,
   maybeUser
 ) => {
-  if (!gmailDraftId) {
+  const draftId =
+    typeof draftIdOrParams === "object"
+      ? draftIdOrParams?.gmailDraftId || draftIdOrParams?.id
+      : draftIdOrParams;
+
+  if (!draftId) {
     throw new Error("Gmail draft ID is missing");
   }
 
@@ -407,8 +421,137 @@ export const deleteGmailDraft = async (
     async (gmail) => {
       await gmail.users.drafts.delete({
         userId: "me",
-        id: gmailDraftId
+        id: draftId
       });
+    },
+    maybeUser
+  );
+};
+
+/**
+ * Get a specific Gmail message by ID.
+ */
+export const getMessage = async (
+  gmailOrUser,
+  messageIdOrParams,
+  maybeUser
+) => {
+  const params =
+    typeof messageIdOrParams === "string"
+      ? { messageId: messageIdOrParams }
+      : messageIdOrParams || {};
+  const targetId = params.messageId || params.id;
+  if (!targetId) throw new Error("Message ID is missing");
+  const format = params.format || "full";
+
+  return withGmail(
+    gmailOrUser,
+    async (gmail) => {
+      const res = await gmail.users.messages.get({
+        userId: "me",
+        id: targetId,
+        format
+      });
+      return res.data;
+    },
+    maybeUser
+  );
+};
+
+/**
+ * List Gmail messages matching a query.
+ */
+export const listMessages = async (gmailOrUser, params = {}, maybeUser) => {
+  return withGmail(
+    gmailOrUser,
+    async (gmail) => {
+      const res = await gmail.users.messages.list({
+        userId: "me",
+        ...params
+      });
+      return res.data;
+    },
+    maybeUser
+  );
+};
+
+/**
+ * Get a specific Gmail thread by ID.
+ */
+export const getThread = async (gmailOrUser, threadIdOrParams, maybeUser) => {
+  const params =
+    typeof threadIdOrParams === "string"
+      ? { threadId: threadIdOrParams }
+      : threadIdOrParams || {};
+  const targetId = params.threadId || params.id;
+  if (!targetId) throw new Error("Thread ID is missing");
+  const format = params.format || "full";
+
+  return withGmail(
+    gmailOrUser,
+    async (gmail) => {
+      const res = await gmail.users.threads.get({
+        userId: "me",
+        id: targetId,
+        format
+      });
+      return res.data;
+    },
+    maybeUser
+  );
+};
+
+/**
+ * List all labels in Gmail account.
+ */
+export const listGmailLabels = async (gmailOrUser, maybeUser) => {
+  return withGmail(
+    gmailOrUser,
+    async (gmail) => {
+      const res = await gmail.users.labels.list({ userId: "me" });
+      return res.data;
+    },
+    maybeUser
+  );
+};
+
+/**
+ * Create a new label in Gmail.
+ */
+export const createGmailLabel = async (
+  gmailOrUser,
+  { name, labelListVisibility, messageListVisibility } = {},
+  maybeUser
+) => {
+  return withGmail(
+    gmailOrUser,
+    async (gmail) => {
+      const res = await gmail.users.labels.create({
+        userId: "me",
+        requestBody: {
+          name,
+          ...(labelListVisibility ? { labelListVisibility } : {}),
+          ...(messageListVisibility ? { messageListVisibility } : {})
+        }
+      });
+      return res.data;
+    },
+    maybeUser
+  );
+};
+
+/**
+ * Delete a label from Gmail by label ID.
+ */
+export const deleteGmailLabel = async (gmailOrUser, labelId, maybeUser) => {
+  return withGmail(
+    gmailOrUser,
+    async (gmail) => {
+      const res = await gmail.users.labels.delete({
+        userId: "me",
+        id: labelId
+      });
+      return res.data;
     },
     maybeUser
   );
@@ -417,77 +560,89 @@ export const deleteGmailDraft = async (
 /**
  * Setup default Gmail labels.
  */
-export const setupDefaultLabels = async (user) => {
-  if (user.labels && user.labels.length > 0) return;
+export const setupDefaultLabels = async (userOrGmail, maybeUser) => {
+  let user = maybeUser;
 
-  return withGmail(user, async (gmail) => {
-    const DEFAULT_LABELS = [
-      {
-        name: "Work",
-        tone: "formal",
-        markAsRead: true,
-        enabled: true,
-        action: { type: "reply", template: "I'll get back to you soon." }
-      },
-      {
-        name: "Personal",
-        tone: "friendly",
-        markAsRead: true,
-        enabled: true,
-        action: { type: "none" }
-      },
-      {
-        name: "Promotions",
-        tone: "casual",
-        markAsRead: true,
-        enabled: true,
-        action: { type: "none" }
-      },
-      {
-        name: "Important",
-        tone: "formal",
-        markAsRead: false,
-        enabled: true,
-        action: { type: "draft", template: "Thanks, drafting a response." }
-      }
-    ];
+  if (userOrGmail && !userOrGmail.users) {
+    user = userOrGmail;
+  }
 
-    const created = [];
-    const existingLabels = await gmail.users.labels.list({ userId: "me" });
-    const existingByName = new Map(
-      (existingLabels.data.labels || []).map((label) => [
-        label.name.toLowerCase(),
-        label
-      ])
-    );
+  if (user && user.labels && user.labels.length > 0) return user.labels;
 
-    for (const l of DEFAULT_LABELS) {
-      let gmailLabel = existingByName.get(l.name.toLowerCase());
+  return withGmail(
+    userOrGmail,
+    async (gmail) => {
+      const DEFAULT_LABELS = [
+        {
+          name: "Work",
+          tone: "formal",
+          markAsRead: true,
+          enabled: true,
+          action: { type: "reply", template: "I'll get back to you soon." }
+        },
+        {
+          name: "Personal",
+          tone: "friendly",
+          markAsRead: true,
+          enabled: true,
+          action: { type: "none" }
+        },
+        {
+          name: "Promotions",
+          tone: "casual",
+          markAsRead: true,
+          enabled: true,
+          action: { type: "none" }
+        },
+        {
+          name: "Important",
+          tone: "formal",
+          markAsRead: false,
+          enabled: true,
+          action: { type: "draft", template: "Thanks, drafting a response." }
+        }
+      ];
 
-      if (!gmailLabel) {
-        const res = await gmail.users.labels.create({
-          userId: "me",
-          requestBody: { name: l.name }
+      const created = [];
+      const existingLabels = await gmail.users.labels.list({ userId: "me" });
+      const existingByName = new Map(
+        (existingLabels.data.labels || []).map((label) => [
+          label.name.toLowerCase(),
+          label
+        ])
+      );
+
+      for (const l of DEFAULT_LABELS) {
+        let gmailLabel = existingByName.get(l.name.toLowerCase());
+
+        if (!gmailLabel) {
+          const res = await gmail.users.labels.create({
+            userId: "me",
+            requestBody: { name: l.name }
+          });
+          gmailLabel = res.data;
+        }
+
+        created.push({
+          name: l.name,
+          id: gmailLabel.id,
+          tone: l.tone,
+          markAsRead: l.markAsRead,
+          enabled: l.enabled,
+          action: l.action
         });
-        gmailLabel = res.data;
       }
 
-      created.push({
-        name: l.name,
-        id: gmailLabel.id,
-        tone: l.tone,
-        markAsRead: l.markAsRead,
-        enabled: l.enabled,
-        action: l.action
-      });
-    }
-
-    user.labels = created;
-    if (typeof user.save === "function") {
-      await user.save();
-    }
-    return user.labels;
-  });
+      if (user) {
+        user.labels = created;
+        if (typeof user.save === "function") {
+          await user.save();
+        }
+      }
+      return created;
+    },
+    user
+  );
 };
 
 /**

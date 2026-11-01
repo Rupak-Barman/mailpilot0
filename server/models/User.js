@@ -49,10 +49,6 @@ const UserSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  lastSync: {
-    type: Date,
-    default: null
-  },
   lastSyncAt: {
     type: Date,
     default: null

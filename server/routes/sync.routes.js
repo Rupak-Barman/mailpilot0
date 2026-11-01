@@ -10,7 +10,7 @@ const router = express.Router();
 export const handleGetSyncStatus = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select(
-      "syncStatus syncError lastSync lastSyncAt needsRelogin"
+      "syncStatus syncError lastSyncAt needsRelogin"
     );
 
     if (!user) {
@@ -26,7 +26,7 @@ export const handleGetSyncStatus = async (req, res) => {
     ]);
 
     const status = user.syncStatus || "idle";
-    const lastSync = user.lastSync || user.lastSyncAt || null;
+    const lastSync = user.lastSyncAt || null;
     const error = user.syncError || null;
     const needsRelogin = Boolean(user.needsRelogin);
 

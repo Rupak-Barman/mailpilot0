@@ -6,3 +6,4 @@ if (process.env.PREFER_IPV4 !== "false") {
 }
 
 export default dns;
+

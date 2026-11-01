@@ -14,7 +14,18 @@ import {
   modifyMessageLabels,
   InvalidGrantError,
   getProfile,
-  listHistory
+  listHistory,
+  createGmailDraft,
+  sendGmailDraft,
+  sendGmailMessage,
+  deleteGmailDraft,
+  getMessage,
+  listMessages,
+  getThread,
+  setupDefaultLabels,
+  listGmailLabels,
+  createGmailLabel,
+  deleteGmailLabel
 } from "../services/gmail.service.js";
 import {
   isOllamaReachable,
@@ -37,7 +48,7 @@ describe("Data Models - User and ProcessedEmail additions", () => {
     assert.ok(paths.needsRelogin, "User should have needsRelogin");
     assert.ok(paths.dailyReplySentCount, "User should have dailyReplySentCount");
     assert.ok(paths.dailyReplySentDate, "User should have dailyReplySentDate");
-    assert.ok(paths.lastSync, "User should have lastSync");
+    assert.ok(paths.lastSyncAt, "User should have lastSyncAt");
 
     assert.deepEqual(paths.syncStatus.enumValues, ["idle", "running", "error"]);
     assert.equal(paths.needsRelogin.defaultValue, false);
@@ -332,6 +343,152 @@ describe("Gmail service - OAuth2 client & error handling", () => {
     assert.equal(capturedArgs.addLabelIds, undefined);
     assert.equal(capturedArgs.removeLabelIds, undefined);
   });
+
+  it("createGmailDraft, sendGmailDraft, sendGmailMessage, and deleteGmailDraft invoke Gmail API via withGmail", async () => {
+    let createArgs = null;
+    let sendDraftArgs = null;
+    let sendMessageArgs = null;
+    let deleteDraftArgs = null;
+
+    const mockGmail = {
+      users: {
+        drafts: {
+          create: async (args) => {
+            createArgs = args;
+            return { data: { id: "draft_new" } };
+          },
+          send: async (args) => {
+            sendDraftArgs = args;
+            return { data: { id: "msg_sent" } };
+          },
+          delete: async (args) => {
+            deleteDraftArgs = args;
+            return { data: {} };
+          }
+        },
+        messages: {
+          send: async (args) => {
+            sendMessageArgs = args;
+            return { data: { id: "msg_direct" } };
+          }
+        }
+      }
+    };
+
+    const draftRes = await createGmailDraft(mockGmail, {
+      to: "client@example.com",
+      subject: "Test Draft",
+      body: "Draft body",
+      threadId: "thread_123"
+    });
+    assert.equal(draftRes.id, "draft_new");
+    assert.ok(createArgs.requestBody.message.raw);
+    assert.equal(createArgs.requestBody.message.threadId, "thread_123");
+
+    const sendDraftRes = await sendGmailDraft(mockGmail, "draft_new");
+    assert.equal(sendDraftRes.id, "msg_sent");
+    assert.equal(sendDraftArgs.requestBody.id, "draft_new");
+
+    const sendMsgRes = await sendGmailMessage(mockGmail, {
+      to: "client@example.com",
+      subject: "Direct Message",
+      body: "Direct message body"
+    });
+    assert.equal(sendMsgRes.id, "msg_direct");
+    assert.ok(sendMessageArgs.requestBody.raw);
+
+    await deleteGmailDraft(mockGmail, "draft_new");
+    assert.equal(deleteDraftArgs.id, "draft_new");
+  });
+
+  it("getMessage, listMessages, and getThread invoke Gmail API via withGmail", async () => {
+    let getMsgArgs = null;
+    let listMsgArgs = null;
+    let getThreadArgs = null;
+
+    const mockGmail = {
+      users: {
+        messages: {
+          get: async (args) => {
+            getMsgArgs = args;
+            return { data: { id: args.id, snippet: "Hello world" } };
+          },
+          list: async (args) => {
+            listMsgArgs = args;
+            return { data: { messages: [{ id: "m1" }, { id: "m2" }] } };
+          }
+        },
+        threads: {
+          get: async (args) => {
+            getThreadArgs = args;
+            return { data: { id: args.id, messages: [{ id: "m1" }] } };
+          }
+        }
+      }
+    };
+
+    const msg = await getMessage(mockGmail, "msg_abc");
+    assert.equal(msg.id, "msg_abc");
+    assert.equal(getMsgArgs.id, "msg_abc");
+    assert.equal(getMsgArgs.format, "full");
+
+    const list = await listMessages(mockGmail, { q: "is:unread" });
+    assert.equal(list.messages.length, 2);
+    assert.equal(listMsgArgs.q, "is:unread");
+
+    const thread = await getThread(mockGmail, "thread_xyz");
+    assert.equal(thread.id, "thread_xyz");
+    assert.equal(getThreadArgs.id, "thread_xyz");
+  });
+
+  it("listGmailLabels, createGmailLabel, deleteGmailLabel, and setupDefaultLabels invoke Gmail API via withGmail", async () => {
+    let listLabelsCalled = false;
+    let createLabelArgs = null;
+    let deleteLabelArgs = null;
+
+    const mockGmail = {
+      users: {
+        labels: {
+          list: async () => {
+            listLabelsCalled = true;
+            return { data: { labels: [{ id: "Label_1", name: "Work" }] } };
+          },
+          create: async (args) => {
+            createLabelArgs = args;
+            return { data: { id: "Label_new", name: args.requestBody.name } };
+          },
+          delete: async (args) => {
+            deleteLabelArgs = args;
+            return { data: {} };
+          }
+        }
+      }
+    };
+
+    const labels = await listGmailLabels(mockGmail);
+    assert.equal(listLabelsCalled, true);
+    assert.equal(labels.labels[0].name, "Work");
+
+    const created = await createGmailLabel(mockGmail, { name: "Receipts" });
+    assert.equal(created.id, "Label_new");
+    assert.equal(createLabelArgs.requestBody.name, "Receipts");
+
+    await deleteGmailLabel(mockGmail, "Label_old");
+    assert.equal(deleteLabelArgs.id, "Label_old");
+
+    // Test setupDefaultLabels
+    let userSaved = false;
+    const fakeUser = {
+      labels: [],
+      save: async () => {
+        userSaved = true;
+      }
+    };
+
+    const initializedLabels = await setupDefaultLabels(mockGmail, fakeUser);
+    assert.ok(initializedLabels.length > 0);
+    assert.equal(userSaved, true);
+  });
 });
 
 describe("Ollama health and reachability checks", () => {
@@ -387,7 +544,7 @@ describe("Sync status route handler", () => {
       select: async () => ({
         syncStatus: "running",
         syncError: null,
-        lastSync: fakeLastSync,
+        lastSyncAt: fakeLastSync,
         needsRelogin: false
       })
     });
