@@ -1,15 +1,3 @@
-// import express from "express";
-// import auth from "../middleware/auth.js";
-// import User from "../models/User.js";
-// const router = express.Router();
-// const clean = (v, max) => String(v || "").trim().slice(0, max);
-// router.get("/", auth, async (req,res) => { const user=await User.findById(req.user.id).select("personas"); if(!user) return res.status(404).json({message:"User not found"}); res.json(user.personas || []); });
-// router.post("/", auth, async (req,res) => { const name=clean(req.body.name,80); if(!name) return res.status(400).json({message:"Persona name is required"}); const user=await User.findById(req.user.id); if(!user) return res.status(404).json({message:"User not found"}); if(user.personas.some(p=>p.name.toLowerCase()===name.toLowerCase())) return res.status(409).json({message:"A persona with this name already exists"}); user.personas.push({name,instructions:clean(req.body.instructions,4000),tone:["formal","casual","friendly","technical"].includes(req.body.tone)?req.body.tone:"friendly",signature:clean(req.body.signature,1000)}); await user.save(); res.status(201).json(user.personas[user.personas.length-1]); });
-// router.patch("/:personaId", auth, async (req,res) => { const user=await User.findById(req.user.id); const persona=user?.personas.id(req.params.personaId); if(!persona) return res.status(404).json({message:"Persona not found"}); if(req.body.name!==undefined){const name=clean(req.body.name,80); if(!name) return res.status(400).json({message:"Persona name is required"}); persona.name=name;} if(req.body.instructions!==undefined) persona.instructions=clean(req.body.instructions,4000); if(req.body.signature!==undefined) persona.signature=clean(req.body.signature,1000); if(req.body.tone!==undefined && ["formal","casual","friendly","technical"].includes(req.body.tone)) persona.tone=req.body.tone; await user.save(); res.json(persona); });
-// router.delete("/:personaId", auth, async (req,res) => { const user=await User.findById(req.user.id); const persona=user?.personas.id(req.params.personaId); if(!persona) return res.status(404).json({message:"Persona not found"}); const id=String(persona._id); user.personas.pull({ _id: persona._id }); user.labels.forEach(label=>{if(label.personaId===id) label.personaId="";}); await user.save(); res.json({message:"Persona deleted"}); });
-// export default router;
-
-
 import express from "express";
 
 import auth from "../middleware/auth.js";

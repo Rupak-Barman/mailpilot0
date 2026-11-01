@@ -16,5 +16,3 @@ export const formatDateTime = (value) => {
     minute: "2-digit"
   }).format(new Date(value));
 };
-
-export const asArray = (value) => Array.isArray(value) ? value : [];

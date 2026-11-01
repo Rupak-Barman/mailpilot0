@@ -1,6 +1,5 @@
 {
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
     "@lancedb/lancedb": "^0.41.0",
     "axios": "^1.15.2",
     "cors": "^2.8.6",
