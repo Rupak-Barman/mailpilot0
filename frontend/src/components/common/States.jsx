@@ -14,9 +14,20 @@ export const EmptyState = ({ title, description }) => (
   </div>
 );
 
-export const ErrorState = ({ message = "Something went wrong." }) => (
-  <div className="flex min-h-28 items-center justify-center gap-2 rounded-lg border border-rose-300 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
-    <FiAlertCircle className="h-5 w-5" />
-    {message}
+export const ErrorState = ({ message = "Something went wrong.", onRetry }) => (
+  <div className="flex min-h-28 flex-col items-center justify-center gap-3 rounded-lg border border-rose-300 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+    <div className="flex items-center gap-2">
+      <FiAlertCircle className="h-5 w-5 shrink-0" />
+      <span>{message}</span>
+    </div>
+    {onRetry && (
+      <button
+        type="button"
+        onClick={onRetry}
+        className="rounded border border-rose-400 bg-white px-3 py-1 text-xs font-semibold text-rose-700 shadow-xs hover:bg-rose-50 dark:border-rose-500/40 dark:bg-rose-950/40 dark:text-rose-200 dark:hover:bg-rose-900/50 cursor-pointer"
+      >
+        Retry
+      </button>
+    )}
   </div>
 );

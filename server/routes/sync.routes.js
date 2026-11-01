@@ -17,12 +17,15 @@ export const handleGetSyncStatus = async (req, res) => {
       return res.status(404).json({ message: "User not found." });
     }
 
-    const [queueSize, ollamaReachable] = await Promise.all([
+    const [queueSize, ollamaReachable, processedCount] = await Promise.all([
       ProcessedEmail.countDocuments({
         userId: String(req.user.id),
         status: { $in: ["processing", "retry"] }
       }),
-      isOllamaReachable()
+      isOllamaReachable(),
+      ProcessedEmail.countDocuments({
+        userId: String(req.user.id)
+      })
     ]);
 
     const status = user.syncStatus || "idle";
@@ -33,10 +36,12 @@ export const handleGetSyncStatus = async (req, res) => {
     return res.json({
       status,
       lastSync,
+      lastSyncAt: lastSync,
       error,
       needsRelogin,
       queueSize,
-      ollamaReachable
+      ollamaReachable,
+      processedCount
     });
   } catch (err) {
     console.error("Get sync-status error:", err);

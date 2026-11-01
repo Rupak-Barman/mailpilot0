@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -20,12 +21,18 @@ export const useEmailActions = (params) =>
   useQuery({
     queryKey: ["email-actions", params],
     queryFn: () => getEmailActions(params),
+    placeholderData: keepPreviousData,
+    refetchInterval: 45_000,
+    refetchOnWindowFocus: true,
   });
 
 export const useEmailActionSummary = () =>
   useQuery({
     queryKey: ["email-action-summary"],
     queryFn: getEmailActionSummary,
+    placeholderData: keepPreviousData,
+    refetchInterval: 45_000,
+    refetchOnWindowFocus: true,
   });
 
 const invalidateEmailActionQueries = (queryClient) => {
@@ -35,6 +42,10 @@ const invalidateEmailActionQueries = (queryClient) => {
 
   queryClient.invalidateQueries({
     queryKey: ["email-action-summary"],
+  });
+
+  queryClient.invalidateQueries({
+    queryKey: ["analytics"],
   });
 };
 
@@ -62,10 +73,6 @@ export const useSendEmailAction = () => {
 
     onSuccess: () => {
       invalidateEmailActionQueries(queryClient);
-
-      queryClient.invalidateQueries({
-        queryKey: ["analytics"],
-      });
     },
   });
 };
@@ -76,12 +83,8 @@ export const useUpdateEmailActionDraft = () => {
   return useMutation({
     mutationFn: updateEmailActionDraft,
 
-    onSuccess: (result) => {
+    onSuccess: () => {
       invalidateEmailActionQueries(queryClient);
-
-      queryClient.invalidateQueries({
-        queryKey: ["analytics"],
-      });
     },
   });
 };
@@ -94,10 +97,6 @@ export const useDeleteEmailActionDraft = () => {
 
     onSuccess: () => {
       invalidateEmailActionQueries(queryClient);
-
-      queryClient.invalidateQueries({
-        queryKey: ["analytics"],
-      });
     },
   });
 };
@@ -109,10 +108,8 @@ export const useUpdateEmailActionLabel = () => {
     mutationFn: updateEmailActionLabel,
 
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["email-actions"]
-      });
-    }
+      invalidateEmailActionQueries(queryClient);
+    },
   });
 };
 
@@ -124,10 +121,6 @@ export const useManualSendEmailAction = () => {
 
     onSuccess: () => {
       invalidateEmailActionQueries(queryClient);
-
-      queryClient.invalidateQueries({
-        queryKey: ["analytics"],
-      });
     },
   });
 };
@@ -140,10 +133,6 @@ export const useTryAiDraftAction = () => {
 
     onSuccess: () => {
       invalidateEmailActionQueries(queryClient);
-
-      queryClient.invalidateQueries({
-        queryKey: ["analytics"],
-      });
     },
   });
 };

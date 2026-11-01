@@ -88,6 +88,193 @@ export const buildFailedFilter = (userId) => ({
   ]
 });
 
+export const buildDraftFilter = (userId) => ({
+  userId,
+  $or: [
+    {
+      turns: { $exists: true, $not: { $size: 0 } },
+      $expr: {
+        $eq: [
+          { $arrayElemAt: ["$turns.outgoing.kind", -1] },
+          "draft"
+        ]
+      }
+    },
+    {
+      $and: [
+        {
+          $or: [
+            { turns: { $exists: false } },
+            { turns: { $size: 0 } }
+          ]
+        },
+        { type: "draft" }
+      ]
+    }
+  ]
+});
+
+export const buildReplyFilter = (userId) => ({
+  userId,
+  $or: [
+    {
+      turns: { $exists: true, $not: { $size: 0 } },
+      $expr: {
+        $eq: [
+          { $arrayElemAt: ["$turns.outgoing.kind", -1] },
+          "reply"
+        ]
+      }
+    },
+    {
+      $and: [
+        {
+          $or: [
+            { turns: { $exists: false } },
+            { turns: { $size: 0 } }
+          ]
+        },
+        { type: "reply" }
+      ]
+    }
+  ]
+});
+
+export const buildEmailActionsFilter = ({ userId, checked, type, label, q, status, tab }) => {
+  const filter = { userId };
+
+  if (checked === "true") filter.checked = true;
+  if (checked === "false") filter.checked = false;
+
+  if (tab === "failed" || type === "failed") {
+    filter.$and = filter.$and || [];
+    filter.$and.push({ $or: buildFailedFilter(userId).$or });
+  } else if (tab === "draft" || type === "draft") {
+    filter.type = "draft";
+  } else if (tab === "reply" || type === "reply") {
+    filter.type = "reply";
+  }
+
+  if (status) {
+    if (status === "failed") {
+      filter.$and = filter.$and || [];
+      filter.$and.push({ $or: buildFailedFilter(userId).$or });
+    } else if (status === "draft") {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          {
+            turns: { $exists: true, $not: { $size: 0 } },
+            $expr: {
+              $eq: [{ $arrayElemAt: ["$turns.outgoing.status", -1] }, "draft"]
+            }
+          },
+          {
+            $and: [
+              {
+                $or: [
+                  { turns: { $exists: false } },
+                  { turns: { $size: 0 } }
+                ]
+              },
+              { status: "draft" }
+            ]
+          }
+        ]
+      });
+    } else if (status === "sent") {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          {
+            turns: { $exists: true, $not: { $size: 0 } },
+            $expr: {
+              $eq: [{ $arrayElemAt: ["$turns.outgoing.status", -1] }, "sent"]
+            }
+          },
+          {
+            $and: [
+              {
+                $or: [
+                  { turns: { $exists: false } },
+                  { turns: { $size: 0 } }
+                ]
+              },
+              { status: "sent" }
+            ]
+          }
+        ]
+      });
+    } else if (status === "needs_reply") {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { status: "needs_reply" },
+          {
+            turns: { $exists: true, $not: { $size: 0 } },
+            $expr: {
+              $and: [
+                {
+                  $not: {
+                    $in: [
+                      { $arrayElemAt: ["$turns.outcome", -1] },
+                      ["failed", "needs_manual"]
+                    ]
+                  }
+                },
+                {
+                  $eq: [
+                    { $ifNull: [{ $arrayElemAt: ["$turns.outgoing", -1] }, null] },
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      });
+    } else if (status === "reviewed") {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { checked: true },
+          { status: "reviewed" }
+        ]
+      });
+    } else if (status === "unchecked") {
+      filter.checked = false;
+    } else if (status === "checked") {
+      filter.checked = true;
+    } else {
+      filter.status = status;
+    }
+  }
+
+  if (label) {
+    filter.label = label;
+  }
+
+  if (q && q.trim()) {
+    const escapedQ = q.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = { $regex: escapedQ, $options: "i" };
+    filter.$and = filter.$and || [];
+    filter.$and.push({
+      $or: [
+        { subject: regex },
+        { to: regex },
+        { body: regex },
+        { summary: regex },
+        { "turns.incomingSubject": regex },
+        { "turns.incomingSummary": regex },
+        { "turns.outgoing.body": regex },
+        { "turns.from": regex }
+      ]
+    });
+  }
+
+  return filter;
+};
+
 export const handleGetSummary = async (req, res) => {
   const userId = req.user.id;
 
@@ -110,91 +297,15 @@ export const handleGetEmailActions = async (req, res) => {
   const limit = asPositiveInt(req.query.limit, 20, 100);
   const skip = (page - 1) * limit;
 
-  const filter = { userId: req.user.id };
-
-  if (checked === "true") filter.checked = true;
-  if (checked === "false") filter.checked = false;
-
-  if (tab === "failed" || type === "failed") {
-    filter.$and = filter.$and || [];
-    filter.$and.push({
-      $or: [
-        {
-          turns: { $exists: true, $not: { $size: 0 } },
-          $expr: {
-            $in: [
-              { $arrayElemAt: ["$turns.outcome", -1] },
-              ["failed", "needs_manual"]
-            ]
-          }
-        },
-        {
-          $and: [
-            {
-              $or: [
-                { turns: { $exists: false } },
-                { turns: { $size: 0 } }
-              ]
-            },
-            {
-              $or: [
-                { status: "failed" },
-                { status: "send_failed" },
-                { type: "failed" }
-              ]
-            }
-          ]
-        }
-      ]
-    });
-  } else if (["reply", "draft", "none"].includes(type)) {
-    filter.type = type;
-  }
-
-  if (status === "failed") {
-    filter.$and = filter.$and || [];
-    filter.$and.push({
-      $or: [
-        { status: "failed" },
-        { status: "send_failed" },
-        {
-          turns: { $exists: true, $not: { $size: 0 } },
-          $expr: {
-            $in: [
-              { $arrayElemAt: ["$turns.outcome", -1] },
-              ["failed", "needs_manual"]
-            ]
-          }
-        }
-      ]
-    });
-  } else if (
-    [
-      "draft",
-      "sending",
-      "sent",
-      "send_failed",
-      "unread",
-      "needs_reply",
-      "reviewed"
-    ].includes(status)
-  ) {
-    filter.status = status;
-  }
-  if (label) filter.label = label;
-  if (q && q.trim()) {
-    const escapedQ = q.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    filter.$or = [
-      { subject: { $regex: escapedQ, $options: "i" } },
-      { to: { $regex: escapedQ, $options: "i" } },
-      { body: { $regex: escapedQ, $options: "i" } },
-      { summary: { $regex: escapedQ, $options: "i" } },
-      { "turns.incomingSubject": { $regex: escapedQ, $options: "i" } },
-      { "turns.incomingSummary": { $regex: escapedQ, $options: "i" } },
-      { "turns.outgoing.body": { $regex: escapedQ, $options: "i" } },
-      { "turns.from": { $regex: escapedQ, $options: "i" } }
-    ];
-  }
+  const filter = buildEmailActionsFilter({
+    userId: req.user.id,
+    checked,
+    type,
+    label,
+    q,
+    status,
+    tab
+  });
 
   const [rawItems, total] = await Promise.all([
     EmailAction.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
@@ -488,7 +599,8 @@ router.post("/:id/send", auth, async (req, res) => {
       draftTurn.outcome = "sent";
     }
 
-    action.type = "reply";
+    // Keep draft kind so sent draft stays in Drafts tab with "Sent" badge
+    action.type = draftTurn?.outgoing?.kind || action.type || "draft";
     action.status = "sent";
     action.sentAt = now;
     action.gmailMessageId = sentMessageId;

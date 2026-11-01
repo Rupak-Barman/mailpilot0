@@ -424,11 +424,11 @@ Do **not** rely on regexes to detect a greeting or sign-off — inject them in c
 - Server-side search on `turns[]` array requires MongoDB `$elemMatch` or `$unwind` — verify index on `turns.incomingSubject`.
 
 ### Test plan
-- [ ] Trigger a data refetch; confirm search input and filter dropdowns stay visible.
-- [ ] Apply a filter; navigate away and back; confirm filter is restored from URL.
-- [ ] Send a draft; confirm it stays in Drafts tab (not disappears).
-- [ ] Type in search box and press Escape; confirm input clears.
-- [ ] Confirm table shows skeleton rows (not blank) during loading.
+- [x] Trigger a data refetch; confirm search input and filter dropdowns stay visible.
+- [x] Apply a filter; navigate away and back; confirm filter is restored from URL.
+- [x] Send a draft; confirm it stays in Drafts tab (not disappears).
+- [x] Type in search box and press Escape; confirm input clears.
+- [x] Confirm table shows skeleton rows (not blank) during loading.
 
 ---
 
@@ -867,14 +867,14 @@ These tests must pass before marking the fix plan complete.
 - [x] 3.3 `{can_answer, body}` contract + validation
 - [x] 3.4 `grounding` field on label schema
 - [x] 3.5 `needs_manual` outcome wired through
-- [ ] 3.6 "Failed" tab in frontend
+- [x] 3.6 "Failed" tab in frontend
 
 ### Batch 4 – UI
-- [ ] 4.1 Remove full-page LoadingState; add skeleton rows
-- [ ] 4.2 `placeholderData: keepPreviousData`; 20s refetch
-- [ ] 4.3 Filters persisted in URL
-- [ ] 4.4 Fix tab/status contradiction (derive tabs & badges from latest turn's outgoing.kind/status; no origin field)
-- [ ] 4.5 Status badge redesign
+- [x] 4.1 Remove full-page LoadingState; add skeleton rows
+- [x] 4.2 `placeholderData: keepPreviousData`; 20s refetch
+- [x] 4.3 Filters persisted in URL
+- [x] 4.4 Fix tab/status contradiction (derive tabs & badges from latest turn's outgoing.kind/status; no origin field)
+- [x] 4.5 Status badge redesign
 
 ### Batch 5 – Analytics
 - [ ] 5.1 Switch source of truth to `ProcessedEmail`
