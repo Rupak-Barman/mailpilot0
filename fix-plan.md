@@ -381,7 +381,7 @@ Do **not** rely on regexes to detect a greeting or sign-off — inject them in c
 - [x] Trigger a label with `grounding:"strict"` and low-confidence RAG; confirm `needs_manual`.
 - [x] Trigger generation that would produce a placeholder; confirm `needs_manual` outcome.
 - [x] Confirm `_distance` is now returned by `searchKnowledge`.
-- [ ] "Failed" tab appears in frontend; failed turn shows manual compose box.
+- [x] "Failed" tab appears in frontend; failed turn shows manual compose box.
 
 ---
 

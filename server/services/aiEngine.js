@@ -147,7 +147,8 @@ export const analyzeEmailAI = async ({
   userProfileDescription,
   labels,
   personas = [],
-  previousTurns = []
+  previousTurns = [],
+  bypassRetrievalGate = false
 }) => {
   const usableLabels = labels || [];
   if (!usableLabels.length) {
@@ -224,7 +225,7 @@ ${bodyText || snippet || ""}`
     let retrievedKnowledge = "";
     let bestDistance = null;
 
-    if (grounding === "strict") {
+    if (grounding === "strict" && !bypassRetrievalGate) {
       if (!userId || !emailText.trim() || selectedIds.length === 0) {
         return {
           label: selectedLabel.name,
@@ -292,6 +293,26 @@ ${bodyText || snippet || ""}`
           bestDistance: null
         };
       }
+    } else if (grounding === "strict" && bypassRetrievalGate) {
+      // Best-effort retrieval when gate is bypassed
+      if (userId && emailText.trim() && selectedIds.length > 0) {
+        try {
+          const queryVector = await generateQueryEmbedding(emailText);
+          const matched = await searchKnowledge({
+            userId: String(userId),
+            documentIds: selectedIds,
+            queryVector,
+            limit: 5
+          });
+          if (matched && matched.length > 0) {
+            retrievedKnowledge = matched
+              .map((doc) => `[${doc.fileName}]\n${doc.text}`)
+              .join("\n\n---\n\n");
+          }
+        } catch (err) {
+          console.warn("Bypassed retrieval warning:", err.message);
+        }
+      }
     } else {
       // Flexible mode: No RAG. Polite acknowledgement only, never invented facts/dates/prices/commitments.
       retrievedKnowledge = "";
@@ -329,9 +350,13 @@ USER PROFILE: ${userProfileDescription || "No profile description provided."}
 ${turnsContext ? `\nCONVERSATION THREAD CONTEXT (last 3 turns):\n${turnsContext}\n` : ""}
 
 KNOWLEDGE POLICY:
-${grounding === "flexible"
-  ? "POLITE ACKNOWLEDGEMENT ONLY: You have no external knowledge documents. Write a polite acknowledgement only. Do NOT invent facts, dates, prices, or commitments."
-  : "Use only relevant facts from the selected knowledge documents below. If the documents do not contain the answer, set can_answer to false. Do not invent facts."}
+${
+  bypassRetrievalGate
+    ? "UNGROUNDED RESPONSE: The document retrieval gate is bypassed. Write a polite and helpful response or acknowledgement for the sender. Always generate a helpful body."
+    : grounding === "flexible"
+    ? "POLITE ACKNOWLEDGEMENT ONLY: You have no external knowledge documents. Write a polite acknowledgement only. Do NOT invent facts, dates, prices, or commitments."
+    : "Use only relevant facts from the selected knowledge documents below. If the documents do not contain the answer, set can_answer to false. Do not invent facts."
+}
 
 ${grounding === "strict" ? `SELECTED DOCUMENT CONTEXT:\n${retrievedKnowledge}\n` : ""}
 
@@ -354,7 +379,7 @@ If you cannot answer without inventing facts:
 
     const generated = await generateLocalResponse(prompt);
 
-    if (generated?.can_answer === false) {
+    if (generated?.can_answer === false && !bypassRetrievalGate) {
       return {
         label: selectedLabel.name,
         action: configuredAction,
@@ -367,10 +392,14 @@ If you cannot answer without inventing facts:
       };
     }
 
-    const rawBody = String(generated?.body || "")
+    let rawBody = String(generated?.body || "")
       .replace(/\\n/g, "\n")
       .replace(/\r\n/g, "\n")
       .trim();
+
+    if (!rawBody && bypassRetrievalGate) {
+      rawBody = "Thank you for reaching out. We have received your message and will follow up shortly.";
+    }
 
     // Strip accidental greeting or sign-off from model text
     const strippedBody = stripGreetingsAndSignOffs(rawBody);
@@ -384,7 +413,7 @@ If you cannot answer without inventing facts:
       persona: `${personaInstructions} ${persona?.name || ""}`
     });
 
-    if (!validation.valid) {
+    if (!validation.valid && !bypassRetrievalGate) {
       return {
         label: selectedLabel.name,
         action: configuredAction,
@@ -405,15 +434,18 @@ If you cannot answer without inventing facts:
 
     return {
       label: selectedLabel.name,
-      action: configuredAction,
+      action: bypassRetrievalGate ? "draft" : configuredAction,
       can_answer: true,
       outcome:
-        configuredAction === "reply"
-          ? "sent"
-          : (configuredAction === "draft" ? "drafted" : "none"),
+        bypassRetrievalGate
+          ? "drafted"
+          : (configuredAction === "reply"
+              ? "sent"
+              : (configuredAction === "draft" ? "drafted" : "none")),
       body: finalBody,
       summary,
-      bestDistance
+      bestDistance,
+      ungrounded: Boolean(bypassRetrievalGate)
     };
   } catch (error) {
     console.error("Local AI email analysis failed:", error.message);
@@ -426,3 +458,5 @@ If you cannot answer without inventing facts:
     throw new AIPermanentError(error.message, error);
   }
 };
+
+export const generateEmailAnalysis = analyzeEmailAI;

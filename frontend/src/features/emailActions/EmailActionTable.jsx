@@ -21,6 +21,34 @@ const getStatusTone = (status) => {
   }
 };
 
+export const getFailureReasonLabel = (reason) => {
+  if (!reason) return "Other";
+  const r = String(reason).toLowerCase();
+  if (r.includes("knowledge") || r === "no_knowledge_match") {
+    return "No knowledge match";
+  }
+  if (
+    r.includes("invalid") ||
+    r.includes("placeholder") ||
+    r.includes("empty_body") ||
+    r.includes("markdown") ||
+    r.includes("json") ||
+    r.includes("invented")
+  ) {
+    return "Invalid AI output";
+  }
+  if (
+    r.includes("unavailable") ||
+    r.includes("transient") ||
+    r.includes("connect") ||
+    r.includes("timeout") ||
+    r.includes("ollama")
+  ) {
+    return "AI unavailable";
+  }
+  return "Other";
+};
+
 export const EmailActionTable = ({ items = [], selectedId, onSelect }) => {
   if (items.length === 0) {
     return (
@@ -59,6 +87,13 @@ export const EmailActionTable = ({ items = [], selectedId, onSelect }) => {
                 latestTurn?.outgoing?.status || item.status || "draft";
               const type =
                 latestTurn?.outgoing?.kind || item.type || "draft";
+              const isFailed =
+                latestTurn?.outcome === "failed" ||
+                latestTurn?.outcome === "needs_manual" ||
+                status === "failed" ||
+                status === "send_failed";
+              const failureReason =
+                latestTurn?.failureReason || item.failureReason;
 
               return (
                 <tr
@@ -105,9 +140,18 @@ export const EmailActionTable = ({ items = [], selectedId, onSelect }) => {
 
                   {/* Status from latest turn */}
                   <td className="px-4 py-2.5 whitespace-nowrap">
-                    <Badge tone={getStatusTone(status)}>
-                      {titleCase(status)}
-                    </Badge>
+                    {isFailed ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge tone="rose">Failed</Badge>
+                        <Badge tone="amber">
+                          {getFailureReasonLabel(failureReason)}
+                        </Badge>
+                      </div>
+                    ) : (
+                      <Badge tone={getStatusTone(status)}>
+                        {titleCase(status)}
+                      </Badge>
+                    )}
                   </td>
 
                   {/* Category */}
@@ -151,6 +195,13 @@ export const EmailActionTable = ({ items = [], selectedId, onSelect }) => {
             latestTurn?.outgoing?.status || item.status || "draft";
           const type =
             latestTurn?.outgoing?.kind || item.type || "draft";
+          const isFailed =
+            latestTurn?.outcome === "failed" ||
+            latestTurn?.outcome === "needs_manual" ||
+            status === "failed" ||
+            status === "send_failed";
+          const failureReason =
+            latestTurn?.failureReason || item.failureReason;
 
           return (
             <button
@@ -184,9 +235,18 @@ export const EmailActionTable = ({ items = [], selectedId, onSelect }) => {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <Badge tone={getStatusTone(status)}>
-                  {titleCase(status)}
-                </Badge>
+                {isFailed ? (
+                  <>
+                    <Badge tone="rose">Failed</Badge>
+                    <Badge tone="amber">
+                      {getFailureReasonLabel(failureReason)}
+                    </Badge>
+                  </>
+                ) : (
+                  <Badge tone={getStatusTone(status)}>
+                    {titleCase(status)}
+                  </Badge>
+                )}
                 <span className="text-xs text-slate-400">
                   {messageCount} {messageCount === 1 ? "msg" : "msgs"}
                 </span>

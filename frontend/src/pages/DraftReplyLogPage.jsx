@@ -15,6 +15,8 @@ import {
   useUpdateEmailActionDraft,
   useDeleteEmailActionDraft,
   useUpdateEmailActionLabel,
+  useManualSendEmailAction,
+  useTryAiDraftAction,
 } from "../hooks/useEmailActions";
 
 export const DraftReplyLogPage = () => {
@@ -34,6 +36,26 @@ export const DraftReplyLogPage = () => {
   const updateDraft = useUpdateEmailActionDraft();
   const deleteDraft = useDeleteEmailActionDraft();
   const updateLabel = useUpdateEmailActionLabel();
+  const manualSendAction = useManualSendEmailAction();
+  const tryAiDraftAction = useTryAiDraftAction();
+
+  const handleManualSend = (payload, callbacks) => {
+    manualSendAction.mutate(payload, {
+      onSuccess: (result) => {
+        setSelected(result.action);
+        callbacks?.onSuccess?.(result);
+      },
+    });
+  };
+
+  const handleTryAiDraft = (payload, callbacks) => {
+    tryAiDraftAction.mutate(payload, {
+      onSuccess: (result) => {
+        setSelected(result.action);
+        callbacks?.onSuccess?.(result);
+      },
+    });
+  };
 
   const updateDraftLabel = (item, label, onSuccess) => {
     updateLabel.mutate(
@@ -96,6 +118,8 @@ export const DraftReplyLogPage = () => {
       params.type = "draft";
     } else if (filters.tab === "reply") {
       params.type = "reply";
+    } else if (filters.tab === "failed") {
+      params.tab = "failed";
     }
 
     // Map status filter
@@ -216,6 +240,18 @@ export const DraftReplyLogPage = () => {
         labelError={
           updateLabel.error?.response?.data?.message ||
           updateLabel.error?.message
+        }
+        onManualSend={handleManualSend}
+        isManualSending={manualSendAction.isPending}
+        manualSendError={
+          manualSendAction.error?.response?.data?.message ||
+          manualSendAction.error?.message
+        }
+        onTryAiDraft={handleTryAiDraft}
+        isTryingAiDraft={tryAiDraftAction.isPending}
+        tryAiDraftError={
+          tryAiDraftAction.error?.response?.data?.message ||
+          tryAiDraftAction.error?.message
         }
       />
     </div>

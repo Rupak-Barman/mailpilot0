@@ -261,3 +261,4 @@ if (isMain || process.argv[1]?.endsWith("rag-distance-report.js")) {
     process.exit(1);
   });
 }
+

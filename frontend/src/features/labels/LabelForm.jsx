@@ -11,6 +11,7 @@ const labelSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(40, "Name is too long"),
   actionType: z.enum(["reply", "draft", "none"]),
   tone: z.enum(["formal", "casual", "friendly"]),
+  grounding: z.enum(["strict", "flexible"]),
   markAsRead: z.boolean()
 });
 
@@ -19,6 +20,7 @@ export const LabelForm = () => {
     name: "",
     actionType: "none",
     tone: "friendly",
+    grounding: "flexible",
     markAsRead: true
   });
   const [error, setError] = useState("");
@@ -35,6 +37,7 @@ export const LabelForm = () => {
     createLabel.mutate({
       name: parsed.data.name,
       tone: parsed.data.tone,
+      grounding: parsed.data.grounding,
       markAsRead: parsed.data.markAsRead,
       action: { type: parsed.data.actionType }
     }, {
@@ -42,13 +45,14 @@ export const LabelForm = () => {
         name: "",
         actionType: "none",
         tone: "friendly",
+        grounding: "flexible",
         markAsRead: true
       })
     });
   };
 
   return (
-    <div className="grid gap-3 border-b border-slate-200 p-3 dark:border-slate-800 lg:grid-cols-[1.3fr_1fr_1fr_auto_auto] lg:items-end">
+    <div className="grid gap-3 border-b border-slate-200 p-3 dark:border-slate-800 lg:grid-cols-[1.2fr_0.9fr_0.9fr_1.5fr_auto_auto] lg:items-end">
       <div>
         <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">Label name</label>
         <Input
@@ -82,6 +86,25 @@ export const LabelForm = () => {
           {toneOptions.map(option => <option key={option} value={option}>{titleCase(option)}</option>)}
         </Select>
       </div>
+      <div>
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">Grounding</label>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500">
+            (Default: Flexible)
+          </span>
+        </div>
+        <Select
+          value={form.grounding}
+          onChange={(event) => setForm(current => ({ ...current, grounding: event.target.value }))}
+          className="mt-2"
+        >
+          <option value="strict">Strict: only reply from my documents</option>
+          <option value="flexible">Flexible: polite acknowledgements only</option>
+        </Select>
+        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+          Strict requires document matches. Flexible allows polite acknowledgements.
+        </p>
+      </div>
       <div className="flex items-center justify-between gap-3 lg:flex-col lg:items-start">
         <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Mark read</span>
         <Toggle
@@ -94,7 +117,7 @@ export const LabelForm = () => {
         Add Label
       </Button>
       {(error || createLabel.error) && (
-        <p className="text-sm text-rose-500 lg:col-span-5">{error || createLabel.error?.response?.data?.message || "Could not save label"}</p>
+        <p className="text-sm text-rose-500 lg:col-span-6">{error || createLabel.error?.response?.data?.message || "Could not save label"}</p>
       )}
     </div>
   );

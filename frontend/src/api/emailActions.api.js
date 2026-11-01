@@ -57,3 +57,20 @@ export const updateEmailActionLabel = async ({ id, label }) => {
 
   return data;
 };
+
+export const manualSendEmailAction = async ({ id, body, to, subject }) => {
+  const { data } = await apiClient.post(
+    `/email-actions/${id}/manual-send`,
+    { body, to, subject }
+  );
+
+  return data;
+};
+
+export const tryAiDraftAction = async ({ id }) => {
+  const { data } = await apiClient.post(
+    `/email-actions/${id}/try-ai-draft`
+  );
+
+  return data;
+};

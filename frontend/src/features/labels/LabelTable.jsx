@@ -181,6 +181,7 @@ export const LabelTable = ({ labels = [] }) => {
                 <th className="px-4 py-3">Label name</th>
                 <th className="px-4 py-3">Default action</th>
                 <th className="px-4 py-3">Tone</th>
+                <th className="px-4 py-3">Grounding</th>
                 <th className="px-4 py-3">Writing persona</th>
                 <th className="px-4 py-3">Knowledge bases</th>
                 <th className="px-4 py-3">Mark read</th>
@@ -242,6 +243,23 @@ export const LabelTable = ({ labels = [] }) => {
                           {titleCase(option)}
                         </option>
                       ))}
+                    </Select>
+                  </td>
+
+                  <td className="px-4 py-2.5">
+                    <Select
+                      value={
+                        label.grounding ||
+                        ((label.knowledgeDocumentIds?.length || 0) > 0 ? "strict" : "flexible")
+                      }
+                      onChange={(event) =>
+                        update(label, {
+                          grounding: event.target.value
+                        })
+                      }
+                    >
+                      <option value="strict">Strict (Docs)</option>
+                      <option value="flexible">Flexible</option>
                     </Select>
                   </td>
 

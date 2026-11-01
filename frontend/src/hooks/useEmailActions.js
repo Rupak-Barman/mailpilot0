@@ -11,7 +11,9 @@ import {
   sendEmailAction,
   updateEmailActionDraft,
   deleteEmailActionDraft,
-  updateEmailActionLabel
+  updateEmailActionLabel,
+  manualSendEmailAction,
+  tryAiDraftAction,
 } from "../api/emailActions.api";
 
 export const useEmailActions = (params) =>
@@ -111,5 +113,37 @@ export const useUpdateEmailActionLabel = () => {
         queryKey: ["email-actions"]
       });
     }
+  });
+};
+
+export const useManualSendEmailAction = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: manualSendEmailAction,
+
+    onSuccess: () => {
+      invalidateEmailActionQueries(queryClient);
+
+      queryClient.invalidateQueries({
+        queryKey: ["analytics"],
+      });
+    },
+  });
+};
+
+export const useTryAiDraftAction = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: tryAiDraftAction,
+
+    onSuccess: () => {
+      invalidateEmailActionQueries(queryClient);
+
+      queryClient.invalidateQueries({
+        queryKey: ["analytics"],
+      });
+    },
   });
 };

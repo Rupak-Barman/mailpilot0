@@ -45,6 +45,10 @@ const OutgoingTurnSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    ungrounded: {
+      type: Boolean,
+      default: false
+    },
     inReplyTo: String,
     references: String
   },

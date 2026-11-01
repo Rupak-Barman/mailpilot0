@@ -6,6 +6,7 @@ const tabs = [
   { label: "Unchecked", value: "unchecked", key: "unchecked" },
   { label: "Drafts",    value: "draft",     key: "drafts" },
   { label: "Replies",   value: "reply",     key: "replies" },
+  { label: "Failed",    value: "failed",    key: "failed" },
   { label: "All",       value: "all",       key: "total" }
 ];
 
@@ -101,7 +102,7 @@ export const EmailActionFilters = ({ filters, setFilters, summary }) => {
           <option value="unchecked">Unchecked</option>
           <option value="draft">Draft</option>
           <option value="sent">Sent</option>
-          <option value="send_failed">Failed</option>
+          <option value="failed">Failed</option>
         </Select>
       </div>
     </div>

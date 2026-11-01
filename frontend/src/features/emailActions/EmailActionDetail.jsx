@@ -14,11 +14,14 @@ import {
   FiChevronDown,
   FiChevronUp,
   FiExternalLink,
+  FiAlertTriangle,
+  FiCpu,
 } from "react-icons/fi";
 
 import { Button } from "../../components/common/Button";
 import { Badge } from "../../components/common/Badge";
 import { formatDateTime, titleCase } from "../../utils/formatters";
+import { getFailureReasonLabel } from "./EmailActionTable";
 
 export const EmailActionDetail = ({
   item,
@@ -37,6 +40,12 @@ export const EmailActionDetail = ({
   onUpdateLabel,
   isUpdatingLabel,
   labelError,
+  onManualSend,
+  isManualSending,
+  manualSendError,
+  onTryAiDraft,
+  isTryingAiDraft,
+  tryAiDraftError,
 }) => (
   <>
     {item && (
@@ -58,6 +67,12 @@ export const EmailActionDetail = ({
         onUpdateLabel={onUpdateLabel}
         isUpdatingLabel={isUpdatingLabel}
         labelError={labelError}
+        onManualSend={onManualSend}
+        isManualSending={isManualSending}
+        manualSendError={manualSendError}
+        onTryAiDraft={onTryAiDraft}
+        isTryingAiDraft={isTryingAiDraft}
+        tryAiDraftError={tryAiDraftError}
       />
     )}
   </>
@@ -98,8 +113,15 @@ const EmailActionDetailContent = ({
   onUpdateLabel,
   isUpdatingLabel,
   labelError,
+  onManualSend,
+  isManualSending,
+  manualSendError,
+  onTryAiDraft,
+  isTryingAiDraft,
+  tryAiDraftError,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
+  const [manualReplyText, setManualReplyText] = useState("");
 
   // Derive chronological turns (oldest at index 0, newest at end)
   const turns =
@@ -212,7 +234,46 @@ const EmailActionDetailContent = ({
       latestOutgoingStatus === "failed");
 
   const isBusy =
-    isUpdatingDraft || isDeletingDraft || isUpdatingLabel || isSendingNow;
+    isUpdatingDraft ||
+    isDeletingDraft ||
+    isUpdatingLabel ||
+    isSendingNow ||
+    isManualSending ||
+    isTryingAiDraft;
+
+  const handleManualSend = () => {
+    if (!manualReplyText.trim()) {
+      window.alert("Please enter a reply before sending.");
+      return;
+    }
+    const confirmed = window.confirm(`Send this manual reply to ${item.to}?`);
+    if (!confirmed) return;
+
+    onManualSend(
+      {
+        id: item._id,
+        body: manualReplyText.trim(),
+        to: item.to,
+        subject: item.subject,
+      },
+      {
+        onSuccess: () => {
+          setManualReplyText("");
+        },
+      }
+    );
+  };
+
+  const handleTryAiDraft = () => {
+    onTryAiDraft(
+      { id: item._id },
+      {
+        onSuccess: () => {
+          setManualReplyText("");
+        },
+      }
+    );
+  };
 
   const handleFieldChange = (event) => {
     const { name, value } = event.target;
@@ -633,6 +694,14 @@ const EmailActionDetailContent = ({
                         </div>
 
                         {/* Outgoing Body / Editor */}
+                        {turnOutgoing?.ungrounded && (
+                          <div className="mb-2 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200">
+                            <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                            <div>
+                              <span className="font-semibold">Ungrounded AI Draft:</span> Generated with document retrieval gate bypassed. Please review carefully before sending.
+                            </div>
+                          </div>
+                        )}
                         {isLatest && isEditing ? (
                           <div className="mt-2 space-y-2">
                             <textarea
@@ -733,11 +802,80 @@ const EmailActionDetailContent = ({
                         <Badge tone="slate">No reply needed</Badge>
                       </div>
                     )}
-                    {!turnOutgoing && turn.outcome === "needs_manual" && (
-                      <div className="mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800">
-                        <Badge tone="amber">Needs manual review</Badge>
-                      </div>
-                    )}
+                    {(!turnOutgoing || turnOutgoing.status === "failed") &&
+                      (turn.outcome === "needs_manual" || turn.outcome === "failed" || turnStatus === "failed") && (
+                        <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50/40 p-3.5 text-xs dark:border-rose-900/40 dark:bg-zinc-950/50">
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-200/60 pb-2.5 dark:border-zinc-800">
+                            <div className="flex items-center gap-1.5 font-semibold text-rose-900 dark:text-rose-200">
+                              <Badge tone="rose">Failed</Badge>
+                              <Badge tone="amber">
+                                {getFailureReasonLabel(turn.failureReason || item.failureReason)}
+                              </Badge>
+                            </div>
+                          </div>
+
+                          <div className="mt-2.5 space-y-1.5 text-slate-700 dark:text-slate-300">
+                            <p>
+                              <span className="font-semibold text-slate-900 dark:text-slate-100">
+                                Reason:{" "}
+                              </span>
+                              {turn.failureReason
+                                ? getFailureReasonLabel(turn.failureReason) + ` (${turn.failureReason})`
+                                : "The AI could not confidently generate a grounded response."}
+                            </p>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                              <span className="font-semibold">Incoming Summary: </span>
+                              {turn.incomingSummary || turn.incomingSnippet || item.summary || "No summary available"}
+                            </p>
+                          </div>
+
+                          {/* Compose box for manual reply */}
+                          {isLatest && (
+                            <div className="mt-4 space-y-2.5 border-t border-rose-100 pt-3 dark:border-zinc-800">
+                              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                                Compose manual reply
+                              </label>
+                              <textarea
+                                value={manualReplyText}
+                                onChange={(e) => setManualReplyText(e.target.value)}
+                                rows={5}
+                                placeholder="Write your reply to send directly to recipient..."
+                                className="w-full resize-y rounded-md border border-slate-300 bg-white p-2.5 text-xs leading-5 text-slate-800 outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-slate-200"
+                              />
+
+                              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Button
+                                    variant="success"
+                                    onClick={handleManualSend}
+                                    disabled={isBusy || !manualReplyText.trim()}
+                                  >
+                                    <FiSend className="h-3.5 w-3.5" />
+                                    {isManualSending ? "Sending..." : "Send Reply"}
+                                  </Button>
+
+                                  <Button
+                                    variant="secondary"
+                                    onClick={handleTryAiDraft}
+                                    disabled={isBusy}
+                                    title="Runs generation once with retrieval gate bypassed and creates an ungrounded draft"
+                                  >
+                                    <FiCpu className="h-3.5 w-3.5" />
+                                    {isTryingAiDraft ? "Generating Draft..." : "Try AI draft anyway"}
+                                  </Button>
+                                </div>
+                              </div>
+
+                              {manualSendError && (
+                                <p className="mt-1 text-xs text-red-600">{manualSendError}</p>
+                              )}
+                              {tryAiDraftError && (
+                                <p className="mt-1 text-xs text-red-600">{tryAiDraftError}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                   </div>
                 );
               })}

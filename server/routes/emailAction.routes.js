@@ -5,10 +5,12 @@ import ProcessedEmail from "../models/ProcessedEmail.js";
 import User from "../models/User.js";
 import {
   getGmail,
+  withGmail,
   updateGmailDraft,
   deleteGmailDraft,
 } from "../services/gmail.service.js";
-import { getHeader } from "../utils/helpers.js";
+import { getHeader, buildMimeMessage } from "../utils/helpers.js";
+import { generateEmailAnalysis } from "../services/aiEngine.js";
 
 const router = express.Router();
 
@@ -54,21 +56,56 @@ const getOrCreateGmailLabel = async (gmail, labelName) => {
 
 
 
-router.get("/summary", auth, async (req, res) => {
+export const buildFailedFilter = (userId) => ({
+  userId,
+  $or: [
+    {
+      turns: { $exists: true, $not: { $size: 0 } },
+      $expr: {
+        $in: [
+          { $arrayElemAt: ["$turns.outcome", -1] },
+          ["failed", "needs_manual"]
+        ]
+      }
+    },
+    {
+      $and: [
+        {
+          $or: [
+            { turns: { $exists: false } },
+            { turns: { $size: 0 } }
+          ]
+        },
+        {
+          $or: [
+            { status: "failed" },
+            { status: "send_failed" },
+            { type: "failed" }
+          ]
+        }
+      ]
+    }
+  ]
+});
+
+export const handleGetSummary = async (req, res) => {
   const userId = req.user.id;
 
-  const [unchecked, drafts, replies, total] = await Promise.all([
+  const [unchecked, drafts, replies, failed, total] = await Promise.all([
     EmailAction.countDocuments({ userId, checked: false }),
     EmailAction.countDocuments({ userId, type: "draft" }),
     EmailAction.countDocuments({ userId, type: "reply" }),
+    EmailAction.countDocuments(buildFailedFilter(userId)),
     EmailAction.countDocuments({ userId }),
   ]);
 
-  res.json({ unchecked, drafts, replies, total });
-});
+  res.json({ unchecked, drafts, replies, failed, total });
+};
 
-router.get("/", auth, async (req, res) => {
-  const { checked, type, label, q, status } = req.query;
+router.get("/summary", auth, handleGetSummary);
+
+export const handleGetEmailActions = async (req, res) => {
+  const { checked, type, label, q, status, tab } = req.query;
   const page = asPositiveInt(req.query.page, 1, 10000);
   const limit = asPositiveInt(req.query.limit, 20, 100);
   const skip = (page - 1) * limit;
@@ -77,8 +114,61 @@ router.get("/", auth, async (req, res) => {
 
   if (checked === "true") filter.checked = true;
   if (checked === "false") filter.checked = false;
-  if (["reply", "draft", "none", "failed"].includes(type)) filter.type = type;
-  if (
+
+  if (tab === "failed" || type === "failed") {
+    filter.$and = filter.$and || [];
+    filter.$and.push({
+      $or: [
+        {
+          turns: { $exists: true, $not: { $size: 0 } },
+          $expr: {
+            $in: [
+              { $arrayElemAt: ["$turns.outcome", -1] },
+              ["failed", "needs_manual"]
+            ]
+          }
+        },
+        {
+          $and: [
+            {
+              $or: [
+                { turns: { $exists: false } },
+                { turns: { $size: 0 } }
+              ]
+            },
+            {
+              $or: [
+                { status: "failed" },
+                { status: "send_failed" },
+                { type: "failed" }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+  } else if (["reply", "draft", "none"].includes(type)) {
+    filter.type = type;
+  }
+
+  if (status === "failed") {
+    filter.$and = filter.$and || [];
+    filter.$and.push({
+      $or: [
+        { status: "failed" },
+        { status: "send_failed" },
+        {
+          turns: { $exists: true, $not: { $size: 0 } },
+          $expr: {
+            $in: [
+              { $arrayElemAt: ["$turns.outcome", -1] },
+              ["failed", "needs_manual"]
+            ]
+          }
+        }
+      ]
+    });
+  } else if (
     [
       "draft",
       "sending",
@@ -86,7 +176,6 @@ router.get("/", auth, async (req, res) => {
       "send_failed",
       "unread",
       "needs_reply",
-      "failed",
       "reviewed"
     ].includes(status)
   ) {
@@ -140,7 +229,9 @@ router.get("/", auth, async (req, res) => {
     limit,
     pages: Math.ceil(total / limit),
   });
-});
+};
+
+router.get("/", auth, handleGetEmailActions);
 
 router.patch("/:id/label", auth, async (req, res) => {
   try {
@@ -433,6 +524,285 @@ router.post("/:id/send", auth, async (req, res) => {
     });
   }
 });
+
+export const handleManualSend = async (req, res) => {
+  try {
+    const { body, to, subject } = req.body;
+    if (!body || !String(body).trim()) {
+      return res.status(400).json({ message: "Reply body is required" });
+    }
+
+    const action = await EmailAction.findOne({
+      _id: req.params.id,
+      userId: req.user.id
+    });
+
+    if (!action) {
+      return res.status(404).json({ message: "Record not found" });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user || !user.refreshToken) {
+      return res.status(401).json({ message: "Gmail connection is unavailable" });
+    }
+
+    const turns = action.turns || [];
+    const latestTurn = turns.length > 0 ? turns[turns.length - 1] : null;
+
+    const turnGmailThreadId =
+      latestTurn?.gmailThreadId || action.threadId || action.sourceMessageId;
+    const inReplyTo =
+      latestTurn?.rfcMessageId || latestTurn?.inReplyToHeader || "";
+    const references =
+      latestTurn?.referencesHeader || inReplyTo || "";
+    const recipientTo =
+      to || latestTurn?.from || action.to;
+    let replySubject =
+      subject || latestTurn?.incomingSubject || action.subject || "";
+
+    if (!replySubject.toLowerCase().startsWith("re:")) {
+      replySubject = `Re: ${replySubject.replace(/^re:\s*/i, "")}`.trim();
+    }
+
+    const raw = buildMimeMessage({
+      to: recipientTo,
+      subject: replySubject,
+      body: String(body).trim(),
+      inReplyTo,
+      references,
+      isReply: true
+    });
+
+    const sent = await withGmail(
+      user,
+      async (gmail) => {
+        return await gmail.users.messages.send({
+          userId: "me",
+          requestBody: {
+            raw,
+            threadId: turnGmailThreadId
+          }
+        });
+      },
+      user
+    );
+
+    const sentMessageId = sent.data?.id || "";
+    const now = new Date();
+
+    let sentRfcMessageId = null;
+    if (sentMessageId) {
+      try {
+        const meta = await withGmail(
+          user,
+          async (gmail) => {
+            return await gmail.users.messages.get({
+              userId: "me",
+              id: sentMessageId,
+              format: "metadata",
+              metadataHeaders: ["Message-ID", "Message-Id"]
+            });
+          },
+          user
+        );
+        sentRfcMessageId =
+          getHeader(meta?.data, "Message-ID") ||
+          getHeader(meta?.data, "Message-Id") ||
+          null;
+      } catch (metaErr) {
+        console.warn("[manual-send] Could not fetch sent RFC Message-ID:", metaErr.message);
+      }
+    }
+
+    if (latestTurn) {
+      latestTurn.outcome = "sent";
+      latestTurn.failureReason = null;
+      latestTurn.outgoing = {
+        kind: "reply",
+        body: String(body).trim(),
+        bodyHtml: "",
+        status: "sent",
+        gmailDraftId: null,
+        gmailMessageId: sentMessageId,
+        rfcMessageId: sentRfcMessageId,
+        sentAt: now,
+        composedManually: true,
+        inReplyTo,
+        references
+      };
+    }
+
+    action.type = "reply";
+    action.status = "sent";
+    action.sentAt = now;
+    action.gmailMessageId = sentMessageId;
+    action.checked = true;
+    action.checkedAt = now;
+    await action.save();
+
+    const targetMessageId = latestTurn?.incomingMessageId || action.sourceMessageId;
+    if (targetMessageId) {
+      await ProcessedEmail.findOneAndUpdate(
+        { userId: String(req.user.id), messageId: targetMessageId },
+        {
+          $set: {
+            status: "done",
+            outcome: "sent",
+            sentAt: now,
+            resolvedAt: now,
+            resolution: "manual"
+          }
+        }
+      ).catch((err) => console.warn("[manual-send] Failed to update ProcessedEmail:", err.message));
+    }
+
+    return res.json({
+      message: "Reply sent successfully",
+      action
+    });
+  } catch (error) {
+    console.error("Manual send error:", error.message);
+    return res.status(500).json({
+      message: error.message || "Could not send manual reply"
+    });
+  }
+};
+
+router.post("/:id/manual-send", auth, handleManualSend);
+
+export const handleTryAiDraft = async (req, res) => {
+  try {
+    const action = await EmailAction.findOne({
+      _id: req.params.id,
+      userId: req.user.id
+    });
+
+    if (!action) {
+      return res.status(404).json({ message: "Record not found" });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user || !user.refreshToken) {
+      return res.status(401).json({ message: "Gmail connection is unavailable" });
+    }
+
+    const turns = action.turns || [];
+    const latestTurn = turns.length > 0 ? turns[turns.length - 1] : null;
+
+    const from = latestTurn?.from || action.to || "";
+    const subject = latestTurn?.incomingSubject || action.subject || "";
+    const bodyText =
+      latestTurn?.incomingSummary ||
+      latestTurn?.incomingSnippet ||
+      action.summary ||
+      action.subject ||
+      "";
+    const turnGmailThreadId =
+      latestTurn?.gmailThreadId || action.threadId || action.sourceMessageId;
+    const inReplyTo =
+      latestTurn?.rfcMessageId || latestTurn?.inReplyToHeader || "";
+    const references =
+      latestTurn?.referencesHeader || inReplyTo || "";
+
+    const aiResult = await generateEmailAnalysis({
+      userId: req.user.id,
+      labels: user.labels?.filter((l) => l.enabled !== false) || [],
+      from,
+      subject,
+      bodyText,
+      snippet: latestTurn?.incomingSnippet || "",
+      userProfileDescription: user.description || "",
+      userProfileName: user.name || "",
+      personas: user.personas || [],
+      previousTurns: turns.slice(0, -1),
+      bypassRetrievalGate: true
+    });
+
+    let draftSubject = subject || "";
+    if (!draftSubject.toLowerCase().startsWith("re:")) {
+      draftSubject = `Re: ${draftSubject.replace(/^re:\s*/i, "")}`.trim();
+    }
+
+    const raw = buildMimeMessage({
+      to: from,
+      subject: draftSubject,
+      body: aiResult.body || "Thank you for reaching out. We have received your message and will follow up shortly.",
+      inReplyTo,
+      references,
+      isReply: true
+    });
+
+    const draft = await withGmail(
+      user,
+      async (gmail) => {
+        return await gmail.users.drafts.create({
+          userId: "me",
+          requestBody: {
+            message: {
+              raw,
+              threadId: turnGmailThreadId
+            }
+          }
+        });
+      },
+      user
+    );
+
+    const draftId = draft.data?.id || "";
+    const messageId = draft.data?.message?.id || "";
+
+    if (latestTurn) {
+      latestTurn.outcome = "drafted";
+      latestTurn.failureReason = null;
+      latestTurn.outgoing = {
+        kind: "draft",
+        body: aiResult.body,
+        bodyHtml: "",
+        status: "draft",
+        gmailDraftId: draftId,
+        gmailMessageId: messageId,
+        sentAt: null,
+        composedManually: false,
+        ungrounded: true,
+        inReplyTo,
+        references
+      };
+    }
+
+    action.type = "draft";
+    action.status = "draft";
+    action.body = aiResult.body;
+    action.gmailDraftId = draftId;
+    await action.save();
+
+    const targetMessageId = latestTurn?.incomingMessageId || action.sourceMessageId;
+    if (targetMessageId) {
+      await ProcessedEmail.findOneAndUpdate(
+        { userId: String(req.user.id), messageId: targetMessageId },
+        {
+          $set: {
+            status: "done",
+            outcome: "drafted"
+          }
+        }
+      ).catch((err) => console.warn("[try-ai-draft] Failed to update ProcessedEmail:", err.message));
+    }
+
+    return res.json({
+      message: "Draft generated with retrieval gate bypassed",
+      action,
+      ungrounded: true,
+      warning: "Draft created without document grounding. Review carefully before sending."
+    });
+  } catch (error) {
+    console.error("Try AI draft error:", error.message);
+    return res.status(500).json({
+      message: error.message || "Could not generate AI draft"
+    });
+  }
+};
+
+router.post("/:id/try-ai-draft", auth, handleTryAiDraft);
 
 router.patch("/:id/check", auth, async (req, res) => {
   const checked = req.body.checked !== false;
