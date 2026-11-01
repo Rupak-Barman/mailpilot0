@@ -119,6 +119,14 @@ const UserSchema = new mongoose.Schema({
       knowledgeDocumentIds: {
         type: [String],
         default: []
+      },
+
+      grounding: {
+        type: String,
+        enum: ["strict", "flexible"],
+        default: function () {
+          return this.knowledgeDocumentIds?.length > 0 ? "strict" : "flexible";
+        }
       }
     }
   ]

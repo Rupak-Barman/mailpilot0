@@ -54,7 +54,8 @@ describe("BATCH 2.5: Grouping Follow-ups", () => {
           json: async () => ({
             message: {
               content: JSON.stringify({
-                body: "Generated response body.",
+                can_answer: true,
+                body: "Thank you for reaching out to us today. We will look into this promptly.",
               }),
             },
           }),

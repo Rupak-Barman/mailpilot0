@@ -25,7 +25,7 @@ export const isOllamaReachable = async (timeoutMs = 2000) => {
  */
 export const checkOllamaHealth = async () => {
   const baseUrl = getOllamaBaseUrl();
-  const llmModel = process.env.OLLAMA_LLM_MODEL || "qwen2.5-coder:7b";
+  const llmModel = process.env.OLLAMA_LLM_MODEL || "qwen2.5:7b";
   const embeddingModel =
     process.env.OLLAMA_EMBEDDING_MODEL || "embeddinggemma-2:270m";
 

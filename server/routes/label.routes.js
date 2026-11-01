@@ -97,7 +97,8 @@ router.post("/", auth, async (req, res) => {
       markAsRead,
       enabled = true,
       personaId = "",
-      knowledgeDocumentIds = []
+      knowledgeDocumentIds = [],
+      grounding
     } = req.body;
 
     const cleanName = String(name || "").trim();
@@ -162,6 +163,10 @@ router.post("/", auth, async (req, res) => {
       });
     }
 
+    const cleanGrounding = ["strict", "flexible"].includes(grounding)
+      ? grounding
+      : (cleanKnowledgeIds.length > 0 ? "strict" : "flexible");
+
     const existing = user.labels.find(
       (label) =>
         label.name.toLowerCase() === cleanName.toLowerCase()
@@ -175,6 +180,7 @@ router.post("/", auth, async (req, res) => {
       existing.action = cleanAction;
       existing.personaId = cleanPersonaId;
       existing.knowledgeDocumentIds = cleanKnowledgeIds;
+      existing.grounding = cleanGrounding;
 
       await user.save();
 
@@ -199,7 +205,8 @@ router.post("/", auth, async (req, res) => {
       enabled: cleanEnabled,
       action: cleanAction,
       personaId: cleanPersonaId,
-      knowledgeDocumentIds: cleanKnowledgeIds
+      knowledgeDocumentIds: cleanKnowledgeIds,
+      grounding: cleanGrounding
     };
 
     user.labels.push(newLabel);
@@ -228,7 +235,8 @@ router.patch("/:labelId", auth, async (req, res) => {
       markAsRead,
       enabled,
       personaId,
-      knowledgeDocumentIds
+      knowledgeDocumentIds,
+      grounding
     } = req.body;
 
     const user = await User.findById(req.user.id);
@@ -310,6 +318,12 @@ router.patch("/:labelId", auth, async (req, res) => {
       }
 
       label.knowledgeDocumentIds = cleanKnowledgeIds;
+    }
+
+    if (["strict", "flexible"].includes(grounding)) {
+      label.grounding = grounding;
+    } else if (knowledgeDocumentIds !== undefined && grounding === undefined) {
+      label.grounding = (label.knowledgeDocumentIds?.length || 0) > 0 ? "strict" : "flexible";
     }
 
     await user.save();

@@ -472,6 +472,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
       try {
         const aiRes = await analyzeEmailAI({
           userId: user._id,
+          userProfileName: user.name,
           subject,
           from,
           snippet,
@@ -594,11 +595,13 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     }
 
     // 7. Determine action
+    const isNeedsManual =
+      newestAi.outcome === "needs_manual" || newestAi.can_answer === false;
     const userAction = labelObj.action?.type || "none";
-    let finalAction = newestAi.action === "none" ? "none" : userAction;
+    let finalAction = isNeedsManual || newestAi.action === "none" ? "none" : userAction;
 
     // Check daily reply cap if finalAction is reply
-    if (finalAction === "reply") {
+    if (!isNeedsManual && finalAction === "reply") {
       const today = new Date().toDateString();
       const lastReplyDate = user.dailyReplySentDate ? new Date(user.dailyReplySentDate).toDateString() : null;
       const count = (lastReplyDate === today) ? (user.dailyReplySentCount || 0) : 0;
@@ -624,9 +627,11 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
       }
     }
 
-    const shouldMarkRead = typeof labelObj.markAsRead === "boolean"
-      ? labelObj.markAsRead
-      : finalAction !== "draft";
+    const shouldMarkRead = isNeedsManual
+      ? false
+      : (typeof labelObj.markAsRead === "boolean"
+          ? labelObj.markAsRead
+          : finalAction !== "draft");
 
     let gmailMessageId = "";
     let gmailDraftId = "";
@@ -648,7 +653,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
       }
     }
 
-    if (previousDraftTurn && previousDraftTurn.outgoing?.gmailDraftId) {
+    if (!isNeedsManual && previousDraftTurn && previousDraftTurn.outgoing?.gmailDraftId) {
       // If the previous outgoing is an UNSENT draft: delete that Gmail draft through withGmail,
       // mark its turn outgoing.status "superseded", then create the new draft.
       try {
@@ -662,7 +667,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
 
     let outgoing = null;
 
-    if (["reply", "draft"].includes(finalAction)) {
+    if (!isNeedsManual && ["reply", "draft"].includes(finalAction)) {
       const raw = buildMimeMessage({
         to: newestFrom,
         subject: newestSubject,
@@ -805,7 +810,13 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     }));
 
     // Build turn for newest message
-    const newestOutcome = finalAction === "reply" ? "sent" : (finalAction === "draft" ? "drafted" : "none");
+    const newestOutcome = isNeedsManual
+      ? "needs_manual"
+      : (finalAction === "reply" ? "sent" : (finalAction === "draft" ? "drafted" : "none"));
+    const newestFailureReason = isNeedsManual
+      ? (newestAi.failureReason || "needs_manual")
+      : null;
+
     const newestTurn = {
       incomingMessageId: newestEntry.item.id,
       gmailThreadId: turnGmailThreadId,
@@ -820,7 +831,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
       incomingSummary: newestEntry.summary,
       label: selectedLabelName,
       outcome: newestOutcome,
-      failureReason: null,
+      failureReason: newestFailureReason,
       ...(outgoing ? { outgoing } : {})
     };
 
@@ -837,7 +848,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
         timestamp: new Date()
       });
     }
-    if (["reply", "draft"].includes(finalAction)) {
+    if (!isNeedsManual && ["reply", "draft"].includes(finalAction)) {
       historyItems.push({
         role: "outgoing",
         type: finalAction,
@@ -857,33 +868,37 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
       existingThreadAction.conversationHistory = history;
 
       existingThreadAction.summary = newestEntry.summary;
-      existingThreadAction.body = newestAi.body || "";
+      existingThreadAction.body = isNeedsManual ? "" : (newestAi.body || "");
       existingThreadAction.sourceMessageId = newestEntry.item.id;
-      existingThreadAction.gmailMessageId = gmailMessageId;
-      existingThreadAction.gmailDraftId = gmailDraftId;
-      existingThreadAction.type = finalAction;
+      existingThreadAction.gmailMessageId = isNeedsManual ? "" : gmailMessageId;
+      existingThreadAction.gmailDraftId = isNeedsManual ? "" : gmailDraftId;
+      existingThreadAction.type = isNeedsManual ? "none" : finalAction;
       existingThreadAction.label = selectedLabelName;
-      existingThreadAction.status = finalAction === "reply" ? "sent" : (finalAction === "draft" ? "draft" : "reviewed");
-      existingThreadAction.sentAt = finalAction === "reply" ? new Date() : null;
+      existingThreadAction.status = isNeedsManual
+        ? "failed"
+        : (finalAction === "reply" ? "sent" : (finalAction === "draft" ? "draft" : "reviewed"));
+      existingThreadAction.sentAt = finalAction === "reply" && !isNeedsManual ? new Date() : null;
 
       await existingThreadAction.save();
     } else {
       await EmailAction.create({
         userId: userIdStr,
         sourceMessageId: newestEntry.item.id,
-        gmailMessageId,
-        gmailDraftId,
+        gmailMessageId: isNeedsManual ? "" : gmailMessageId,
+        gmailDraftId: isNeedsManual ? "" : gmailDraftId,
         threadId: effectiveThreadId,
         turns: newTurns,
-        type: finalAction,
+        type: isNeedsManual ? "none" : finalAction,
         label: selectedLabelName,
         to: newestFrom,
         subject: newestSubject,
         summary: newestEntry.summary,
-        body: newestAi.body || "",
+        body: isNeedsManual ? "" : (newestAi.body || ""),
         checked: false,
-        status: finalAction === "reply" ? "sent" : (finalAction === "draft" ? "draft" : "reviewed"),
-        sentAt: finalAction === "reply" ? new Date() : null,
+        status: isNeedsManual
+          ? "failed"
+          : (finalAction === "reply" ? "sent" : (finalAction === "draft" ? "draft" : "reviewed")),
+        sentAt: finalAction === "reply" && !isNeedsManual ? new Date() : null,
         conversationHistory: historyItems
       });
     }
@@ -900,9 +915,12 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
 
     newestEntry.claimDoc.status = "done";
     newestEntry.claimDoc.label = selectedLabelName;
-    newestEntry.claimDoc.action = finalAction;
+    newestEntry.claimDoc.action = isNeedsManual ? "none" : finalAction;
     newestEntry.claimDoc.markAsRead = shouldMarkRead;
-    if (finalAction === "reply") {
+    if (isNeedsManual) {
+      newestEntry.claimDoc.outcome = "needs_manual";
+      newestEntry.claimDoc.failureReason = newestFailureReason;
+    } else if (finalAction === "reply") {
       newestEntry.claimDoc.outcome = "sent";
       newestEntry.claimDoc.sentAt = newestEntry.claimDoc.sentAt || new Date();
     } else if (finalAction === "draft") {
@@ -912,11 +930,13 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     }
     await newestEntry.claimDoc.save();
 
-    await updateAnalytics({
-      userId: user._id,
-      label: selectedLabelName,
-      action: finalAction
-    }).catch(err => console.warn("[poll] Analytics update error:", err.message));
+    if (!isNeedsManual) {
+      await updateAnalytics({
+        userId: user._id,
+        label: selectedLabelName,
+        action: finalAction
+      }).catch(err => console.warn("[poll] Analytics update error:", err.message));
+    }
 
     // 10. Mark as read in Gmail if required
     if (shouldMarkRead) {
@@ -937,7 +957,12 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
       }
     }
 
-    return { processed: true, outcome: newestEntry.claimDoc.outcome, messageCount: validEmailEntries.length };
+    return {
+      processed: true,
+      outcome: newestEntry.claimDoc.outcome,
+      reason: newestEntry.claimDoc.failureReason || undefined,
+      messageCount: validEmailEntries.length
+    };
   } catch (err) {
     console.error(`[poll] Unexpected error processing thread group ${threadId}:`, err.message);
     for (const entry of activeEntries) {

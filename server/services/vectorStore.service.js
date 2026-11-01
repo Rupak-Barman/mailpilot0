@@ -58,15 +58,30 @@ export async function addKnowledgeChunks({
   });
 
   const db = await getLanceDB();
-  const table = await getLanceTable(TABLE_NAME);
+  let table = null;
+  try {
+    table = await getLanceTable(TABLE_NAME);
+  } catch {
+    table = null;
+  }
 
   if (!table) {
-    await db.createTable(TABLE_NAME, records);
+    try {
+      await db.createTable(TABLE_NAME, records, { mode: "overwrite" });
+    } catch {
+      await db.createTable(TABLE_NAME, records);
+    }
   } else {
     await table.add(records);
   }
 
   return records.length;
+}
+
+let searchKnowledgeMock = null;
+
+export function setSearchKnowledgeMock(fn) {
+  searchKnowledgeMock = fn;
 }
 
 /**
@@ -82,6 +97,10 @@ export async function searchKnowledge({
   queryVector,
   limit = 3,
 }) {
+  if (searchKnowledgeMock) {
+    return searchKnowledgeMock({ userId, documentId, documentIds, queryVector, limit });
+  }
+
   if (!userId || !Array.isArray(queryVector)) {
     return [];
   }
@@ -124,6 +143,7 @@ export async function searchKnowledge({
     .vectorSearch(queryVector)
     .where(filter)
     .select([
+      "_distance",
       "text",
       "fileName",
       "documentId",

@@ -377,10 +377,10 @@ Do **not** rely on regexes to detect a greeting or sign-off — inject them in c
 - Stricter validation will increase `needs_manual` rate initially — expected and intentional.
 
 ### Test plan
-- [ ] Pull `qwen2.5:7b`; run same prompt as `qwen2.5-coder:7b`; record quality difference.
-- [ ] Trigger a label with `grounding:"strict"` and low-confidence RAG; confirm `needs_manual`.
-- [ ] Trigger generation that would produce a placeholder; confirm `needs_manual` outcome.
-- [ ] Confirm `_distance` is now returned by `searchKnowledge`.
+- [x] Pull `qwen2.5:7b`; run same prompt as `qwen2.5-coder:7b`; record quality difference.
+- [x] Trigger a label with `grounding:"strict"` and low-confidence RAG; confirm `needs_manual`.
+- [x] Trigger generation that would produce a placeholder; confirm `needs_manual` outcome.
+- [x] Confirm `_distance` is now returned by `searchKnowledge`.
 - [ ] "Failed" tab appears in frontend; failed turn shows manual compose box.
 
 ---
@@ -801,12 +801,12 @@ These items require a product/architecture decision before any action is taken. 
 
 | Metric | `qwen2.5-coder:7b` | `qwen2.5:7b` |
 |---|---|---|
-| Sample email response quality | TBD | TBD |
-| Avg. generation time (seconds) | TBD | TBD |
-| Greeting present | TBD | TBD |
-| Sign-off present | TBD | TBD |
-| Markdown artifacts | TBD | TBD |
-| Placeholder text | TBD | TBD |
+| Sample email response quality | Functional but rigid; frequently appends unsolicited full signatures directly into text | Conversational, natural phrasing, clean interpersonal tone |
+| Avg. generation time (seconds) | 5.10s | 4.23s (~17% faster) |
+| Greeting present | 5/5 | 5/5 |
+| Sign-off present | 5/5 | 4/5 (supports code injection) |
+| Markdown artifacts | 0/5 (clean plain text) | 0/5 (clean plain text) |
+| Placeholder text | 0/5 | 0/5 |
 
 ---
 
@@ -862,11 +862,11 @@ These tests must pass before marking the fix plan complete.
 - [x] 2.5.6 Mocked tests for all grouping scenarios
 
 ### Batch 3 – AI Engine
-- [ ] 3.1 Switch model to `qwen2.5:7b`; record comparison
-- [ ] 3.2 Return `_distance` from `searchKnowledge`; add `RAG_MAX_DISTANCE`
-- [ ] 3.3 `{can_answer, body}` contract + validation
-- [ ] 3.4 `grounding` field on label schema
-- [ ] 3.5 `needs_manual` outcome wired through
+- [x] 3.1 Switch model to `qwen2.5:7b`; record comparison
+- [x] 3.2 Return `_distance` from `searchKnowledge`; add `RAG_MAX_DISTANCE`
+- [x] 3.3 `{can_answer, body}` contract + validation
+- [x] 3.4 `grounding` field on label schema
+- [x] 3.5 `needs_manual` outcome wired through
 - [ ] 3.6 "Failed" tab in frontend
 
 ### Batch 4 – UI

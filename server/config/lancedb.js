@@ -15,7 +15,12 @@ export async function getLanceDB() {
   return dbPromise;
 }
 export async function getLanceTable(name) {
-  const db = await getLanceDB();
-  const names = await db.tableNames();
-  return names.includes(name) ? db.openTable(name) : null;
+  try {
+    const db = await getLanceDB();
+    const names = await db.tableNames();
+    if (!names.includes(name)) return null;
+    return await db.openTable(name);
+  } catch {
+    return null;
+  }
 }

@@ -14,7 +14,7 @@ const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434"
 ).replace(/\/+$/, "");
 
-const LLM_MODEL = process.env.OLLAMA_LLM_MODEL || "qwen2.5-coder:7b";
+const LLM_MODEL = process.env.OLLAMA_LLM_MODEL || "qwen2.5:7b";
 
 export const SUMMARY_UNAVAILABLE_MESSAGE =
   "Summary unavailable (original email no longer in Gmail)";

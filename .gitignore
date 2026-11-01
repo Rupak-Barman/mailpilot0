@@ -36,6 +36,7 @@ build/
 # ==============================================================================
 # Local Database, LanceDB Vector Store & File Uploads
 # ==============================================================================
+data/
 server/data/
 server/data/lancedb/
 *.sqlite
