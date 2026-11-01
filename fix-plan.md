@@ -597,6 +597,75 @@ Changes made directly in the Gmail app (editing, sending or deleting a draft, or
 
 ---
 
+## Batch 5.7 – CC and BCC
+
+### Problem
+Email actions only supported single primary recipients (`to`), without CC or BCC headers, reply-all suggestion handling, user default CC settings, or per-label CC rules.
+
+### Design & Architecture
+1. **Data Model (`User.js`, `EmailAction.js`):**
+   - Each `turn.outgoing` gets `to[]`, `cc[]`, `bcc[]` as arrays of `{ name, email }`.
+   - Lazy migration for existing records: missing fields default to empty arrays `[]` via Mongoose subdocument schema and pre-init / setter normalization.
+   - User settings get `settings.defaultCc[]` (array of email strings).
+   - Label rules get per-label option `alwaysCc[]` (array of email strings).
+   - Backwards-compatible with Batch 6 MIME builder when passing strings or recipient arrays.
+2. **MIME Builder (`server/utils/helpers.js`):**
+   - `buildMimeMessage` accepts `cc` and `bcc` and writes RFC 2822 `Cc` and `Bcc` headers.
+   - Validates every address, deduplicates case-insensitively, removes user's own address from `cc` and `bcc`.
+   - Strips CR/LF from all header values to prevent header injection.
+   - Limits recipients to 20 per field. Subject and body formatting rules from Batch 6 remain unchanged.
+3. **Reply-All Suggestions & Automation (`server/jobs/poll.job.js`):**
+   - When a draft or auto-reply is generated from an incoming message with other recipients, stores them as suggestions only in `outgoing.suggestedCc`.
+   - Never auto-sends to reply-all recipients without explicit user selection.
+   - Always applies configured user default CC and matched label "always CC" automatically.
+4. **API Endpoints (`emailAction.routes.js`, `profile.routes.js`, `label.routes.js`):**
+   - `PATCH /email-actions/:id` accepts `to`, `cc`, `bcc`, `subject`, and `body`.
+   - Draft send (`POST /:id/send`), update draft (`PATCH /:id`), and manual send (`POST /:id/manual-send`) pass them through to Gmail and update the stored record.
+   - Reconcile service (`reconcile.service.js`) reads `Cc` and `Bcc` back from Gmail drafts.
+   - Profile settings route (`PATCH /profile/settings`) accepts and saves `defaultCc`.
+   - Label routes (`POST /labels`, `PATCH /labels/:labelId`) accept and save `alwaysCc`.
+5. **Frontend UI:**
+   - Reusable `EmailChipInput` with email format validation and multi-address paste support.
+   - Latest turn reply editor displays To, Cc, and Bcc fields (with Cc and Bcc collapsed behind "Cc / Bcc" toggle links).
+   - Displays "Add reply-all recipients" button when suggested recipients exist.
+   - Displays CC recipients on sent turns in the timeline.
+   - Failed compose box includes the same To, Cc, Bcc fields and "Add reply-all recipients".
+   - Profile & Rules includes Default CC configuration in AccountPanel.
+   - Routing Rules includes "Always CC" in LabelForm and LabelTable.
+
+### Files changed / created
+| File | Role |
+|---|---|
+| `server/models/User.js` | Added `settings.defaultCc` and `labels[].alwaysCc` |
+| `server/models/EmailAction.js` | Defined `RecipientSchema`, `to[]`, `cc[]`, `bcc[]`, `suggestedCc[]` on `OutgoingTurnSchema` with lazy migration |
+| `server/utils/helpers.js` | Updated `buildMimeMessage` for CC/BCC, validation, deduplication, injection prevention, recipient limits, and recipient helpers |
+| `server/services/gmail.service.js` | `createGmailDraft` and `updateGmailDraft` pass through CC, BCC, and userEmail |
+| `server/services/reconcile.service.js` | Reads `Cc` and `Bcc` from Gmail drafts and updates turn outgoing and action records |
+| `server/jobs/poll.job.js` | Generates `suggestedCc`, applies default and label CC, passes CC/BCC to `buildMimeMessage` |
+| `server/routes/emailAction.routes.js` | Updated draft update, send, and manual-send endpoints for CC and BCC |
+| `server/routes/profile.routes.js` | Updated settings endpoint for `defaultCc` |
+| `server/routes/label.routes.js` | Updated label create/patch endpoints for `alwaysCc` |
+| `frontend/src/components/common/EmailChipInput.jsx` | Reusable email chip input component with validation and paste handling |
+| `frontend/src/features/emailActions/EmailActionDetail.jsx` | Reply editor, Failed compose box, timeline CC display, and "Add reply-all recipients" |
+| `frontend/src/features/profile/AccountPanel.jsx` | Added Default CC input in Profile & Rules |
+| `frontend/src/features/labels/LabelForm.jsx` | Added Always CC field to label rule creation form |
+| `frontend/src/features/labels/LabelTable.jsx` | Added Always CC display column in label rules table |
+| `frontend/src/api/emailActions.api.js` | API client passes `cc` and `bcc` on update, send, and manual send |
+| `server/tests/cc-bcc.test.js` | Comprehensive unit tests for headers, own-address removal, invalid address rejection, header injection, chips, and CC application |
+
+### Test plan
+- [x] Header output: writes `Cc` and `Bcc` headers when provided, omits when empty, preserves Batch 6 string compatibility.
+- [x] Own-address removal: strips user email from `cc` and `bcc` case-insensitively, retains in `to`.
+- [x] Invalid addresses rejected: malformed emails rejected with errors in `to`, `cc`, and `bcc`.
+- [x] Header injection stripped: CR/LF in subject, name, and address sanitized or rejected.
+- [x] Recipient parsing, deduplication, and 20-recipient limit enforced.
+- [x] Default CC and label always CC applied in poll cycle; other recipients saved as `suggestedCc`.
+- [x] Reconcile reads CC and BCC from Gmail drafts.
+- [x] Frontend production build compiles without errors.
+- [x] All 160 server tests pass with 0 failures.
+
+---
+
 ## Batch 6 – Email MIME / Formatting Fixes
 
 ### Issues fixed
@@ -1010,6 +1079,16 @@ These tests must pass before marking the fix plan complete.
 - [x] 5.6.8 Deleted drafts leave Drafts tab counts but stay visible under All
 - [x] 5.6.9 App Send/Delete routes handle 404 via reconcile and return clear messages
 - [x] 5.6.10 Write mocked Gmail unit tests in `server/tests/reconcile.test.js`
+
+### Batch 5.7 – CC and BCC
+- [x] 5.7.1 Update `OutgoingTurnSchema` with `to[]`, `cc[]`, `bcc[]`, `suggestedCc[]` (`{ name, email }`) and lazy migration
+- [x] 5.7.2 Add `settings.defaultCc[]` and label `alwaysCc[]` to `User.js`
+- [x] 5.7.3 Extend `buildMimeMessage` with `cc` & `bcc` headers, email validation, case-insensitive deduplication, own-address removal, CR/LF injection stripping, and 20-recipient limit
+- [x] 5.7.4 Incoming messages with other recipients store `outgoing.suggestedCc` (not sent automatically); default and label CC applied automatically
+- [x] 5.7.5 API endpoints: draft PATCH accepts `to, cc, bcc, subject, body`; send, update-draft and manual-send pass them through; reconcile reads CC and BCC from Gmail drafts
+- [x] 5.7.6 Frontend: reply editor shows To, Cc, Bcc (Cc/Bcc collapsed), email chips with validation & multi-address paste, "Add reply-all recipients", and sent-turn CC display
+- [x] 5.7.7 Frontend: Failed compose box includes To, Cc, Bcc, and "Add reply-all recipients"; Profile & Rules includes default CC; label form includes always CC
+- [x] 5.7.8 Comprehensive tests for headers, own-address removal, invalid address rejection, header injection, chips validation, and CC application in `server/tests/cc-bcc.test.js`
 
 ### Batch 6 – MIME / Formatting
 - [x] 6.1 76-char base64 wrapping

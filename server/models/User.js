@@ -70,6 +70,10 @@ const UserSchema = new mongoose.Schema({
     groupBySender: {
       type: Boolean,
       default: false
+    },
+    defaultCc: {
+      type: [String],
+      default: []
     }
   },
 
@@ -117,6 +121,11 @@ const UserSchema = new mongoose.Schema({
       // These are actual KnowledgeDocument.documentId values,
       // never display names or filenames.
       knowledgeDocumentIds: {
+        type: [String],
+        default: []
+      },
+
+      alwaysCc: {
         type: [String],
         default: []
       },

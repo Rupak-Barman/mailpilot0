@@ -3,7 +3,13 @@ import EmailAction from "../models/EmailAction.js";
 import ProcessedEmail from "../models/ProcessedEmail.js";
 import { getGmail, withGmail } from "./gmail.service.js";
 import { publishUserEvent } from "./events.service.js";
-import { getHeader, textFromPayload, stripQuotedAndHtml } from "../utils/helpers.js";
+import {
+  getHeader,
+  textFromPayload,
+  stripQuotedAndHtml,
+  parseRecipientList,
+  formatRecipientList
+} from "../utils/helpers.js";
 
 export const RECONCILE_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 export const MAX_RECONCILE_PER_RUN = 30;
@@ -58,27 +64,35 @@ export const reconcileTurn = async (user, action, turn, options = {}) => {
       const newBody = rawBody ? stripQuotedAndHtml(rawBody) : "";
       const newMsgId = draftMsg.id;
 
+      const parsedNewTo = parseRecipientList(newTo);
+      const parsedNewCc = parseRecipientList(newCc);
+      const parsedNewBcc = parseRecipientList(newBcc);
+
       const storedSubject = turn.outgoing.subject ?? (isLatest ? action.subject : "") ?? "";
-      const storedTo = turn.outgoing.to ?? (isLatest ? action.to : "") ?? "";
-      const storedCc = turn.outgoing.cc ?? "";
-      const storedBcc = turn.outgoing.bcc ?? "";
+      const storedToFormatted = formatRecipientList(turn.outgoing.to) || (isLatest ? action.to : "") || "";
+      const storedCcFormatted = formatRecipientList(turn.outgoing.cc) || "";
+      const storedBccFormatted = formatRecipientList(turn.outgoing.bcc) || "";
       const storedBody = (turn.outgoing.body ?? (isLatest ? action.body : "") ?? "")
         .replace(/\r\n/g, "\n")
         .trim();
       const normalizedNewBody = (newBody || "").replace(/\r\n/g, "\n").trim();
 
+      const newToFormatted = formatRecipientList(parsedNewTo);
+      const newCcFormatted = formatRecipientList(parsedNewCc);
+      const newBccFormatted = formatRecipientList(parsedNewBcc);
+
       const subjectChanged = Boolean(newSubject && newSubject !== storedSubject);
-      const toChanged = Boolean(newTo && newTo !== storedTo);
-      const ccChanged = Boolean(newCc !== storedCc);
-      const bccChanged = Boolean(newBcc !== storedBcc);
+      const toChanged = Boolean(newTo && newToFormatted !== storedToFormatted);
+      const ccChanged = Boolean(newCcFormatted !== storedCcFormatted);
+      const bccChanged = Boolean(newBccFormatted !== storedBccFormatted);
       const bodyChanged = Boolean(normalizedNewBody && normalizedNewBody !== storedBody);
 
       let changed = false;
       if (subjectChanged || toChanged || ccChanged || bccChanged || bodyChanged) {
         if (newSubject) turn.outgoing.subject = newSubject;
-        if (newTo) turn.outgoing.to = newTo;
-        turn.outgoing.cc = newCc || "";
-        turn.outgoing.bcc = newBcc || "";
+        if (newTo) turn.outgoing.to = parsedNewTo;
+        turn.outgoing.cc = parsedNewCc;
+        turn.outgoing.bcc = parsedNewBcc;
         if (normalizedNewBody) turn.outgoing.body = normalizedNewBody;
         turn.outgoing.editedInGmail = true;
         turn.outgoing.editedAt = now;
@@ -88,7 +102,9 @@ export const reconcileTurn = async (user, action, turn, options = {}) => {
 
         if (isLatest) {
           if (newSubject) action.subject = newSubject;
-          if (newTo) action.to = newTo;
+          if (newTo) action.to = newToFormatted;
+          action.cc = newCcFormatted;
+          action.bcc = newBccFormatted;
           if (normalizedNewBody) action.body = normalizedNewBody;
           if (newMsgId) action.gmailMessageId = newMsgId;
         }

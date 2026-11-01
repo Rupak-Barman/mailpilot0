@@ -98,7 +98,8 @@ router.post("/", auth, async (req, res) => {
       enabled = true,
       personaId = "",
       knowledgeDocumentIds = [],
-      grounding
+      grounding,
+      alwaysCc = []
     } = req.body;
 
     const cleanName = String(name || "").trim();
@@ -167,6 +168,25 @@ router.post("/", auth, async (req, res) => {
       ? grounding
       : (cleanKnowledgeIds.length > 0 ? "strict" : "flexible");
 
+    const cleanAlwaysCc = Array.isArray(alwaysCc)
+      ? [
+          ...new Set(
+            alwaysCc
+              .map((e) => String(e || "").replace(/[\r\n]+/g, "").trim())
+              .filter(Boolean)
+          )
+        ]
+      : typeof alwaysCc === "string"
+      ? [
+          ...new Set(
+            alwaysCc
+              .split(/[,;]/)
+              .map((e) => e.replace(/[\r\n]+/g, "").trim())
+              .filter(Boolean)
+          )
+        ]
+      : [];
+
     const existing = user.labels.find(
       (label) =>
         label.name.toLowerCase() === cleanName.toLowerCase()
@@ -181,6 +201,7 @@ router.post("/", auth, async (req, res) => {
       existing.personaId = cleanPersonaId;
       existing.knowledgeDocumentIds = cleanKnowledgeIds;
       existing.grounding = cleanGrounding;
+      existing.alwaysCc = cleanAlwaysCc;
 
       await user.save();
 
@@ -206,7 +227,8 @@ router.post("/", auth, async (req, res) => {
       action: cleanAction,
       personaId: cleanPersonaId,
       knowledgeDocumentIds: cleanKnowledgeIds,
-      grounding: cleanGrounding
+      grounding: cleanGrounding,
+      alwaysCc: cleanAlwaysCc
     };
 
     user.labels.push(newLabel);
@@ -236,7 +258,8 @@ router.patch("/:labelId", auth, async (req, res) => {
       enabled,
       personaId,
       knowledgeDocumentIds,
-      grounding
+      grounding,
+      alwaysCc
     } = req.body;
 
     const user = await User.findById(req.user.id);
@@ -324,6 +347,27 @@ router.patch("/:labelId", auth, async (req, res) => {
       label.grounding = grounding;
     } else if (knowledgeDocumentIds !== undefined && grounding === undefined) {
       label.grounding = (label.knowledgeDocumentIds?.length || 0) > 0 ? "strict" : "flexible";
+    }
+
+    if (alwaysCc !== undefined) {
+      label.alwaysCc = Array.isArray(alwaysCc)
+        ? [
+            ...new Set(
+              alwaysCc
+                .map((e) => String(e || "").replace(/[\r\n]+/g, "").trim())
+                .filter(Boolean)
+            )
+          ]
+        : typeof alwaysCc === "string"
+        ? [
+            ...new Set(
+              alwaysCc
+                .split(/[,;]/)
+                .map((e) => e.replace(/[\r\n]+/g, "").trim())
+                .filter(Boolean)
+            )
+          ]
+        : [];
     }
 
     await user.save();

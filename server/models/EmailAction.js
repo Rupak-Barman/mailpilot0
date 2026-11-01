@@ -24,15 +24,90 @@ const ConversationItemSchema = new mongoose.Schema(
   { _id: false }
 );
 
+export const RecipientSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      default: ""
+    },
+    email: {
+      type: String,
+      required: true
+    }
+  },
+  { _id: false }
+);
+
+export const normalizeRecipientList = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (!item) return null;
+        if (typeof item === "string") {
+          const trimmed = item.replace(/[\r\n]+/g, "").trim();
+          if (!trimmed) return null;
+          const match = trimmed.match(/^(?:["']?([^<"]*?)["']?\s*)?<([^>]+)>$/);
+          if (match) {
+            return { name: match[1]?.trim() || "", email: match[2]?.trim() || "" };
+          }
+          return { name: "", email: trimmed };
+        }
+        if (typeof item === "object" && item.email) {
+          return {
+            name: String(item.name || "").replace(/[\r\n]+/g, "").trim(),
+            email: String(item.email || "").replace(/[\r\n]+/g, "").trim()
+          };
+        }
+        return null;
+      })
+      .filter((r) => r && r.email);
+  }
+  if (typeof value === "string") {
+    const raw = value.replace(/[\r\n]+/g, "").trim();
+    if (!raw) return [];
+    return raw
+      .split(/[,;]/)
+      .map((part) => {
+        const trimmed = part.trim();
+        if (!trimmed) return null;
+        const match = trimmed.match(/^(?:["']?([^<"]*?)["']?\s*)?<([^>]+)>$/);
+        if (match) {
+          return { name: match[1]?.trim() || "", email: match[2]?.trim() || "" };
+        }
+        return { name: "", email: trimmed };
+      })
+      .filter((r) => r && r.email);
+  }
+  return [];
+};
+
 const OutgoingTurnSchema = new mongoose.Schema(
   {
     kind: {
       type: String,
       enum: ["draft", "reply"]
     },
-    to: String,
-    cc: String,
-    bcc: String,
+    to: {
+      type: [RecipientSchema],
+      default: [],
+      set: normalizeRecipientList
+    },
+    cc: {
+      type: [RecipientSchema],
+      default: [],
+      set: normalizeRecipientList
+    },
+    bcc: {
+      type: [RecipientSchema],
+      default: [],
+      set: normalizeRecipientList
+    },
+    suggestedCc: {
+      type: [RecipientSchema],
+      default: [],
+      set: normalizeRecipientList
+    },
     subject: String,
     body: String, // plain text
     bodyHtml: String, // HTML version
@@ -176,6 +251,19 @@ const EmailActionSchema = new mongoose.Schema(
 
 EmailActionSchema.index({ "turns.gmailThreadId": 1 });
 EmailActionSchema.index({ "turns.rfcMessageId": 1 });
+
+EmailActionSchema.pre("init", function (doc) {
+  if (doc && Array.isArray(doc.turns)) {
+    for (const turn of doc.turns) {
+      if (turn && turn.outgoing) {
+        turn.outgoing.to = normalizeRecipientList(turn.outgoing.to);
+        turn.outgoing.cc = normalizeRecipientList(turn.outgoing.cc);
+        turn.outgoing.bcc = normalizeRecipientList(turn.outgoing.bcc);
+        turn.outgoing.suggestedCc = normalizeRecipientList(turn.outgoing.suggestedCc);
+      }
+    }
+  }
+});
 
 if (mongoose.models.EmailAction) {
   delete mongoose.models.EmailAction;

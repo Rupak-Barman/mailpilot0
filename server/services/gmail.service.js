@@ -259,18 +259,21 @@ export const historyList = listHistory;
  */
 export const createGmailDraft = async (
   gmailOrUser,
-  { to, subject, body, threadId, inReplyTo, references, replyTo },
+  { to, cc, bcc, subject, body, threadId, inReplyTo, references, replyTo, userEmail },
   maybeUser
 ) => {
   const isReply = (subject ?? "").startsWith("Re:");
   const raw = buildMimeMessage({
     to,
+    cc,
+    bcc,
     subject: subject ?? "",
     body,
     inReplyTo,
     references,
     replyTo,
-    isReply
+    isReply,
+    userEmail
   });
 
   return withGmail(
@@ -297,7 +300,7 @@ export const createGmailDraft = async (
  */
 export const updateGmailDraft = async (
   gmailOrUser,
-  { gmailDraftId, to, subject, body, threadId, inReplyTo, references, replyTo },
+  { gmailDraftId, to, cc, bcc, subject, body, threadId, inReplyTo, references, replyTo, userEmail },
   maybeUser
 ) => {
   if (!gmailDraftId) {
@@ -307,12 +310,15 @@ export const updateGmailDraft = async (
   const isReply = (subject ?? "").startsWith("Re:");
   const raw = buildMimeMessage({
     to,
+    cc,
+    bcc,
     subject: subject ?? "",
     body,
     inReplyTo,
     references,
     replyTo,
-    isReply
+    isReply,
+    userEmail
   });
 
   return withGmail(

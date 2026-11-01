@@ -19,9 +19,14 @@ export const setEmailActionChecked = async ({ id, checked }) => {
   return data;
 };
 
-export const sendEmailAction = async ({ id }) => {
+export const sendEmailAction = async ({ id, to, cc, bcc, subject, body }) => {
+  const payload =
+    to !== undefined || cc !== undefined || bcc !== undefined || subject !== undefined || body !== undefined
+      ? { to, cc, bcc, subject, body }
+      : undefined;
   const { data } = await apiClient.post(
     `/email-actions/${id}/send`,
+    payload
   );
 
   return data;
@@ -30,12 +35,14 @@ export const sendEmailAction = async ({ id }) => {
 export const updateEmailActionDraft = async ({
   id,
   to,
+  cc,
+  bcc,
   subject,
   body,
 }) => {
   const { data } = await apiClient.patch(
     `/email-actions/${id}`,
-    { to, subject, body },
+    { to, cc, bcc, subject, body },
   );
 
   return data;
@@ -58,10 +65,10 @@ export const updateEmailActionLabel = async ({ id, label }) => {
   return data;
 };
 
-export const manualSendEmailAction = async ({ id, body, to, subject }) => {
+export const manualSendEmailAction = async ({ id, body, to, cc, bcc, subject }) => {
   const { data } = await apiClient.post(
     `/email-actions/${id}/manual-send`,
-    { body, to, subject }
+    { body, to, cc, bcc, subject }
   );
 
   return data;

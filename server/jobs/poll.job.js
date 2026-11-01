@@ -12,7 +12,14 @@ import {
 import { updateAnalytics } from "../services/analytics.service.js";
 import { publishUserEvent } from "../services/events.service.js";
 import { reconcileUser } from "../services/reconcile.service.js";
-import { getHeader, buildMimeMessage, stripQuotedAndHtml } from "../utils/helpers.js";
+import {
+  getHeader,
+  buildMimeMessage,
+  stripQuotedAndHtml,
+  parseRecipient,
+  parseRecipientList,
+  isValidEmail
+} from "../utils/helpers.js";
 
 // Configuration defaults
 const CATCHUP_HOURS = Number(process.env.CATCHUP_HOURS) || 48;
@@ -682,13 +689,68 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     let outgoing = null;
 
     if (!isNeedsManual && ["reply", "draft"].includes(finalAction)) {
+      const incomingToHeader = getHeader(newestEmail, "To") || "";
+      const incomingCcHeader = getHeader(newestEmail, "Cc") || "";
+      const allIncomingRecipients = [
+        ...parseRecipientList(incomingToHeader),
+        ...parseRecipientList(incomingCcHeader)
+      ];
+      const senderRecipient = parseRecipient(newestFrom);
+      const senderEmailLower = senderRecipient?.email?.toLowerCase() || "";
+      const userEmailLower = (user.email || "").toLowerCase();
+
+      // suggestedCc: other recipients on incoming email, excluding sender and user
+      const suggestedCcMap = new Map();
+      for (const r of allIncomingRecipients) {
+        const emailLower = r.email.toLowerCase();
+        if (emailLower && emailLower !== senderEmailLower && emailLower !== userEmailLower) {
+          if (!suggestedCcMap.has(emailLower)) {
+            suggestedCcMap.set(emailLower, {
+              name: r.name || "",
+              email: r.email
+            });
+          }
+        }
+      }
+      const suggestedCc = Array.from(suggestedCcMap.values()).slice(0, 20);
+
+      // Default and label CC
+      const defaultCcList = user.settings?.defaultCc || [];
+      const labelAlwaysCcList = labelObj?.alwaysCc || [];
+      const configuredCcStrings = [...defaultCcList, ...labelAlwaysCcList];
+      const configuredCcRecipients = [];
+      const configuredCcSeen = new Set();
+      for (const entry of parseRecipientList(configuredCcStrings)) {
+        const emailLower = entry.email.toLowerCase();
+        if (
+          emailLower &&
+          emailLower !== userEmailLower &&
+          !configuredCcSeen.has(emailLower) &&
+          isValidEmail(entry.email)
+        ) {
+          configuredCcSeen.add(emailLower);
+          configuredCcRecipients.push({
+            name: entry.name || "",
+            email: entry.email
+          });
+        }
+      }
+      const appliedCc = configuredCcRecipients.slice(0, 20);
+      const appliedTo = senderRecipient
+        ? [senderRecipient]
+        : [{ name: "", email: newestFrom }];
+      const appliedBcc = [];
+
       const raw = buildMimeMessage({
-        to: newestFrom,
+        to: appliedTo,
+        cc: appliedCc,
+        bcc: appliedBcc,
         subject: newestSubject,
         body: newestAi.body,
         inReplyTo: newestMessageHeaderId,
         references: newestReferences,
-        isReply: true
+        isReply: true,
+        userEmail: user.email
       });
 
       if (finalAction === "reply") {
@@ -755,7 +817,10 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
 
         outgoing = {
           kind: "reply",
-          to: newestFrom,
+          to: appliedTo,
+          cc: appliedCc,
+          bcc: appliedBcc,
+          suggestedCc,
           subject: newestSubject,
           body: newestAi.body,
           bodyHtml: "",
@@ -793,7 +858,10 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
 
         outgoing = {
           kind: "draft",
-          to: newestFrom,
+          to: appliedTo,
+          cc: appliedCc,
+          bcc: appliedBcc,
+          suggestedCc,
           subject: newestSubject,
           body: newestAi.body,
           bodyHtml: "",

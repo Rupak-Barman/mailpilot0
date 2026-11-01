@@ -1,6 +1,9 @@
-import { FiMail, FiWifi } from "react-icons/fi";
+import { useState, useEffect } from "react";
+import { FiMail, FiWifi, FiCheck } from "react-icons/fi";
 import { Card } from "../../components/common/Card";
 import { Badge } from "../../components/common/Badge";
+import { Button } from "../../components/common/Button";
+import { EmailChipInput } from "../../components/common/EmailChipInput";
 import { useUpdateProfileSettings } from "../../hooks/useProfileSettings";
 
 export const AccountPanel = ({ profile, settings }) => {
@@ -8,10 +11,34 @@ export const AccountPanel = ({ profile, settings }) => {
   const currentSettings = settings || profile?.settings || {};
   const groupBySender = Boolean(currentSettings.groupBySender);
 
+  const [defaultCc, setDefaultCc] = useState(() => currentSettings.defaultCc || []);
+  const [hasCcChanges, setHasCcChanges] = useState(false);
+
+  useEffect(() => {
+    setDefaultCc(currentSettings.defaultCc || []);
+    setHasCcChanges(false);
+  }, [currentSettings.defaultCc]);
+
   const handleToggle = () => {
     updateSettings.mutate({
       groupBySender: !groupBySender,
+      defaultCc: (defaultCc || []).map((c) => (typeof c === "object" ? c.email : c)),
     });
+  };
+
+  const handleSaveCc = () => {
+    const cleanList = (defaultCc || []).map((c) => (typeof c === "object" ? c.email : c));
+    updateSettings.mutate(
+      {
+        groupBySender,
+        defaultCc: cleanList,
+      },
+      {
+        onSuccess: () => {
+          setHasCcChanges(false);
+        },
+      }
+    );
   };
 
   return (
@@ -35,7 +62,7 @@ export const AccountPanel = ({ profile, settings }) => {
         </Badge>
       </div>
 
-      <div className="border-t border-slate-100 pt-4 dark:border-zinc-800">
+      <div className="border-t border-slate-100 pt-4 dark:border-zinc-800 space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div>
             <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -62,6 +89,39 @@ export const AccountPanel = ({ profile, settings }) => {
               }`}
             />
           </button>
+        </div>
+
+        <div className="border-t border-slate-100 pt-4 dark:border-zinc-800">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+            <div>
+              <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Default CC
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Automatically add these email addresses to the CC line of every generated draft or reply.
+              </p>
+            </div>
+            {hasCcChanges && (
+              <Button
+                variant="success"
+                onClick={handleSaveCc}
+                disabled={updateSettings.isPending}
+                className="w-fit"
+              >
+                <FiCheck className="h-3.5 w-3.5" />
+                {updateSettings.isPending ? "Saving..." : "Save CC"}
+              </Button>
+            )}
+          </div>
+          <EmailChipInput
+            value={defaultCc}
+            onChange={(next) => {
+              setDefaultCc(next);
+              setHasCcChanges(true);
+            }}
+            placeholder="Add default CC email..."
+            disabled={updateSettings.isPending}
+          />
         </div>
       </div>
     </Card>

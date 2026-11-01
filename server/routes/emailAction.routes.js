@@ -9,7 +9,14 @@ import {
   updateGmailDraft,
   deleteGmailDraft,
 } from "../services/gmail.service.js";
-import { getHeader, buildMimeMessage } from "../utils/helpers.js";
+import {
+  getHeader,
+  buildMimeMessage,
+  parseRecipient,
+  parseRecipientList,
+  formatRecipientList,
+  isValidEmail,
+} from "../utils/helpers.js";
 import { generateEmailAnalysis } from "../services/aiEngine.js";
 import { publishUserEvent } from "../services/events.service.js";
 import { reconcileTurn } from "../services/reconcile.service.js";
@@ -564,6 +571,49 @@ export const handleSendDraft = async (req, res) => {
 
     const gmail = await getGmail(user);
 
+    // If request contains draft overrides, apply them to Gmail before sending
+    const { to, cc, bcc, subject, body } = req.body || {};
+    if (
+      to !== undefined ||
+      cc !== undefined ||
+      bcc !== undefined ||
+      subject !== undefined ||
+      body !== undefined
+    ) {
+      const draftTo = to !== undefined ? parseRecipientList(to) : (draftTurn?.outgoing?.to || action.to);
+      const draftCc = cc !== undefined ? parseRecipientList(cc) : (draftTurn?.outgoing?.cc || action.cc);
+      const draftBcc = bcc !== undefined ? parseRecipientList(bcc) : (draftTurn?.outgoing?.bcc || action.bcc);
+      const draftSubject = subject !== undefined ? String(subject).trim() : (draftTurn?.outgoing?.subject || action.subject || "");
+      const draftBody = body !== undefined ? body : (draftTurn?.outgoing?.body || action.body || "");
+
+      const updatedDraft = await updateGmailDraft(gmail, {
+        gmailDraftId: draftId,
+        to: draftTo,
+        cc: draftCc,
+        bcc: draftBcc,
+        subject: draftSubject,
+        body: draftBody,
+        threadId: action.threadId,
+        userEmail: user.email,
+      });
+
+      if (draftTurn) {
+        if (draftTo) draftTurn.outgoing.to = parseRecipientList(draftTo);
+        if (draftCc !== undefined) draftTurn.outgoing.cc = parseRecipientList(draftCc);
+        if (draftBcc !== undefined) draftTurn.outgoing.bcc = parseRecipientList(draftBcc);
+        draftTurn.outgoing.subject = draftSubject;
+        draftTurn.outgoing.body = draftBody;
+        if (updatedDraft.message?.id) {
+          draftTurn.outgoing.gmailMessageId = updatedDraft.message.id;
+        }
+      }
+      if (draftTo) action.to = formatRecipientList(draftTo);
+      if (draftCc !== undefined) action.cc = formatRecipientList(draftCc);
+      if (draftBcc !== undefined) action.bcc = formatRecipientList(draftBcc);
+      action.subject = draftSubject;
+      action.body = draftBody;
+    }
+
     // Atomically prevent double-clicks and duplicate sending.
     if (draftTurn) {
       draftTurn.outgoing.status = "sending";
@@ -705,7 +755,7 @@ router.post("/:id/send", auth, handleSendDraft);
 
 export const handleManualSend = async (req, res) => {
   try {
-    const { body, to, subject } = req.body;
+    const { body, to, cc, bcc, subject } = req.body;
     if (!body || !String(body).trim()) {
       return res.status(400).json({ message: "Reply body is required" });
     }
@@ -733,8 +783,32 @@ export const handleManualSend = async (req, res) => {
       latestTurn?.rfcMessageId || latestTurn?.inReplyToHeader || "";
     const references =
       latestTurn?.referencesHeader || inReplyTo || "";
-    const recipientTo =
-      to || latestTurn?.from || action.to;
+
+    const rawTo = to || latestTurn?.from || action.to;
+    const recipientTo = parseRecipientList(rawTo);
+    if (recipientTo.length === 0) {
+      return res.status(400).json({ message: "Recipient email is required" });
+    }
+    for (const r of recipientTo) {
+      if (!isValidEmail(r.email)) {
+        return res.status(400).json({ message: `Invalid recipient address: ${r.email}` });
+      }
+    }
+
+    const recipientCc = cc !== undefined ? parseRecipientList(cc) : [];
+    for (const r of recipientCc) {
+      if (!isValidEmail(r.email)) {
+        return res.status(400).json({ message: `Invalid CC address: ${r.email}` });
+      }
+    }
+
+    const recipientBcc = bcc !== undefined ? parseRecipientList(bcc) : [];
+    for (const r of recipientBcc) {
+      if (!isValidEmail(r.email)) {
+        return res.status(400).json({ message: `Invalid BCC address: ${r.email}` });
+      }
+    }
+
     let replySubject =
       subject || latestTurn?.incomingSubject || action.subject || "";
 
@@ -744,11 +818,14 @@ export const handleManualSend = async (req, res) => {
 
     const raw = buildMimeMessage({
       to: recipientTo,
+      cc: recipientCc,
+      bcc: recipientBcc,
       subject: replySubject,
       body: String(body).trim(),
       inReplyTo,
       references,
-      isReply: true
+      isReply: true,
+      userEmail: user.email
     });
 
     const sent = await withGmail(
@@ -797,6 +874,10 @@ export const handleManualSend = async (req, res) => {
       latestTurn.failureReason = null;
       latestTurn.outgoing = {
         kind: "reply",
+        to: recipientTo,
+        cc: recipientCc,
+        bcc: recipientBcc,
+        subject: replySubject,
         body: String(body).trim(),
         bodyHtml: "",
         status: "sent",
@@ -1034,11 +1115,12 @@ router.patch("/:id/check", auth, async (req, res) => {
 // Update a draft in Gmail and synchronize its MongoDB record.
 router.patch("/:id", auth, async (req, res) => {
   try {
-    const { to, subject, body } = req.body;
+    const { to, cc, bcc, subject, body } = req.body;
 
     if (
-      typeof to !== "string" ||
-      !to.trim() ||
+      to === undefined ||
+      subject === undefined ||
+      body === undefined ||
       typeof subject !== "string" ||
       typeof body !== "string"
     ) {
@@ -1047,8 +1129,45 @@ router.patch("/:id", auth, async (req, res) => {
       });
     }
 
+    const parsedTo = parseRecipientList(to);
+    if (parsedTo.length === 0) {
+      return res.status(400).json({
+        message: "Recipient email is required",
+      });
+    }
+    for (const r of parsedTo) {
+      if (!isValidEmail(r.email)) {
+        return res.status(400).json({
+          message: `Invalid recipient email address: ${r.email}`,
+        });
+      }
+    }
+
+    const parsedCc = cc !== undefined ? parseRecipientList(cc) : undefined;
+    if (parsedCc) {
+      for (const r of parsedCc) {
+        if (!isValidEmail(r.email)) {
+          return res.status(400).json({
+            message: `Invalid CC email address: ${r.email}`,
+          });
+        }
+      }
+    }
+
+    const parsedBcc = bcc !== undefined ? parseRecipientList(bcc) : undefined;
+    if (parsedBcc) {
+      for (const r of parsedBcc) {
+        if (!isValidEmail(r.email)) {
+          return res.status(400).json({
+            message: `Invalid BCC email address: ${r.email}`,
+          });
+        }
+      }
+    }
+
+    const formattedTo = formatRecipientList(parsedTo);
     if (
-      to.length > 1000 ||
+      formattedTo.length > 2000 ||
       subject.length > 998 ||
       body.length > 100000
     ) {
@@ -1108,19 +1227,29 @@ router.patch("/:id", auth, async (req, res) => {
 
     const gmail = await getGmail(user);
 
+    const targetCc = parsedCc !== undefined ? parsedCc : draftTurn?.outgoing?.cc;
+    const targetBcc = parsedBcc !== undefined ? parsedBcc : draftTurn?.outgoing?.bcc;
+
     // Update the real Gmail draft first.
     const updatedDraft = await updateGmailDraft(gmail, {
       gmailDraftId: draftId,
-      to: to.trim(),
+      to: parsedTo,
+      cc: targetCc,
+      bcc: targetBcc,
       subject: subject.trim(),
       body,
       threadId: action.threadId,
+      userEmail: user.email,
     });
 
     // Synchronize latest turn if present
     if (draftTurn) {
+      draftTurn.outgoing.to = parsedTo;
+      if (targetCc !== undefined) draftTurn.outgoing.cc = targetCc;
+      if (targetBcc !== undefined) draftTurn.outgoing.bcc = targetBcc;
+      draftTurn.outgoing.subject = subject.trim();
       draftTurn.outgoing.body = body;
-      draftTurn.from = to.trim();
+      draftTurn.from = formattedTo;
       draftTurn.incomingSubject = subject.trim();
       if (updatedDraft.message?.id) {
         draftTurn.outgoing.gmailMessageId = updatedDraft.message.id;
@@ -1128,7 +1257,9 @@ router.patch("/:id", auth, async (req, res) => {
     }
 
     // Synchronize MongoDB top-level record with the edited content.
-    action.to = to.trim();
+    action.to = formattedTo;
+    if (targetCc !== undefined) action.cc = formatRecipientList(targetCc);
+    if (targetBcc !== undefined) action.bcc = formatRecipientList(targetBcc);
     action.subject = subject.trim();
     action.body = body;
 

@@ -133,9 +133,9 @@ describe("BATCH 5.6: Gmail Reconcile", () => {
     assert.equal(turn.outgoing.editedInGmail, true);
     assert.ok(turn.outgoing.editedAt instanceof Date);
     assert.equal(turn.outgoing.subject, "Updated Subject in Gmail");
-    assert.equal(turn.outgoing.to, "updated_client@example.com");
-    assert.equal(turn.outgoing.cc, "team@example.com");
-    assert.equal(turn.outgoing.bcc, "archive@example.com");
+    assert.equal(turn.outgoing.to[0]?.email, "updated_client@example.com");
+    assert.equal(turn.outgoing.cc[0]?.email, "team@example.com");
+    assert.equal(turn.outgoing.bcc[0]?.email, "archive@example.com");
     assert.equal(turn.outgoing.body, "Here is the edited draft body written directly in Gmail web app.");
     assert.equal(turn.outgoing.gmailMessageId, "msg_edited_new_99");
     assert.ok(turn.outgoing.lastReconciledAt instanceof Date);
@@ -143,6 +143,8 @@ describe("BATCH 5.6: Gmail Reconcile", () => {
     // Latest turn updates top-level action fields
     assert.equal(action.subject, "Updated Subject in Gmail");
     assert.equal(action.to, "updated_client@example.com");
+    assert.equal(action.cc, "team@example.com");
+    assert.equal(action.bcc, "archive@example.com");
     assert.equal(action.body, "Here is the edited draft body written directly in Gmail web app.");
     assert.equal(action.gmailMessageId, "msg_edited_new_99");
   });

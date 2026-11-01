@@ -184,6 +184,7 @@ export const LabelTable = ({ labels = [] }) => {
                 <th className="px-4 py-3">Grounding</th>
                 <th className="px-4 py-3">Writing persona</th>
                 <th className="px-4 py-3">Knowledge bases</th>
+                <th className="px-4 py-3">Always CC</th>
                 <th className="px-4 py-3">Mark read</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
@@ -291,6 +292,12 @@ export const LabelTable = ({ labels = [] }) => {
                         update(label, { knowledgeDocumentIds })
                       }
                     />
+                  </td>
+
+                  <td className="px-4 py-2.5 max-w-[180px] text-xs text-slate-600 dark:text-slate-300">
+                    <span className="truncate block" title={label.alwaysCc?.join(", ") || "None"}>
+                      {label.alwaysCc?.length > 0 ? label.alwaysCc.join(", ") : "None"}
+                    </span>
                   </td>
 
                   <td className="px-4 py-2.5">

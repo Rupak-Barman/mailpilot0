@@ -22,6 +22,7 @@ import { Button } from "../../components/common/Button";
 import { Badge } from "../../components/common/Badge";
 import { formatDateTime, titleCase } from "../../utils/formatters";
 import { getFailureReasonLabel } from "./EmailActionTable";
+import { EmailChipInput, parseRawRecipients } from "../../components/common/EmailChipInput";
 
 export const EmailActionDetail = ({
   item,
@@ -171,11 +172,70 @@ const EmailActionDetailContent = ({
     () => new Set([latestIndex])
   );
 
+  const initialTo = latestTurn?.outgoing?.to?.length
+    ? latestTurn.outgoing.to
+    : parseRawRecipients(item.to || "");
+  const initialCc = latestTurn?.outgoing?.cc?.length
+    ? latestTurn.outgoing.cc
+    : parseRawRecipients(item.cc || "");
+  const initialBcc = latestTurn?.outgoing?.bcc?.length
+    ? latestTurn.outgoing.bcc
+    : parseRawRecipients(item.bcc || "");
+
   const [form, setForm] = useState({
-    to: item.to || "",
+    to: initialTo,
+    cc: initialCc,
+    bcc: initialBcc,
     subject: item.subject || "",
     body: latestTurn?.outgoing?.body || item.body || "",
   });
+  const [showCc, setShowCc] = useState(() => initialCc.length > 0);
+  const [showBcc, setShowBcc] = useState(() => initialBcc.length > 0);
+
+  // Manual reply composer state for failed turns
+  const [manualTo, setManualTo] = useState(() =>
+    parseRawRecipients(latestTurn?.from || item.to || "")
+  );
+  const [manualCc, setManualCc] = useState(() =>
+    parseRawRecipients(latestTurn?.outgoing?.cc || item.cc || "")
+  );
+  const [manualBcc, setManualBcc] = useState(() =>
+    parseRawRecipients(latestTurn?.outgoing?.bcc || item.bcc || "")
+  );
+  const [showManualCc, setShowManualCc] = useState(false);
+  const [showManualBcc, setShowManualBcc] = useState(false);
+
+  const suggestedRecipients = parseRawRecipients(
+    latestTurn?.outgoing?.suggestedCc || item.suggestedCc || []
+  );
+
+  const getUnaddedSuggested = (currentToList, currentCcList) => {
+    const existingEmails = new Set([
+      ...currentToList.map((r) => r.email.toLowerCase()),
+      ...currentCcList.map((r) => r.email.toLowerCase()),
+    ]);
+    return suggestedRecipients.filter(
+      (r) => !existingEmails.has(r.email.toLowerCase())
+    );
+  };
+
+  const draftUnaddedSuggested = getUnaddedSuggested(form.to, form.cc);
+  const manualUnaddedSuggested = getUnaddedSuggested(manualTo, manualCc);
+
+  const handleAddReplyAllToDraft = () => {
+    if (draftUnaddedSuggested.length === 0) return;
+    setForm((current) => ({
+      ...current,
+      cc: [...current.cc, ...draftUnaddedSuggested],
+    }));
+    setShowCc(true);
+  };
+
+  const handleAddReplyAllToManual = () => {
+    if (manualUnaddedSuggested.length === 0) return;
+    setManualCc((current) => [...current, ...manualUnaddedSuggested]);
+    setShowManualCc(true);
+  };
 
   // Label editing state
   const [isEditingLabel, setIsEditingLabel] = useState(false);
@@ -184,11 +244,29 @@ const EmailActionDetailContent = ({
   const latestTurnRef = useRef(null);
 
   useEffect(() => {
+    const nextTo = latestTurn?.outgoing?.to?.length
+      ? latestTurn.outgoing.to
+      : parseRawRecipients(item.to || "");
+    const nextCc = latestTurn?.outgoing?.cc?.length
+      ? latestTurn.outgoing.cc
+      : parseRawRecipients(item.cc || "");
+    const nextBcc = latestTurn?.outgoing?.bcc?.length
+      ? latestTurn.outgoing.bcc
+      : parseRawRecipients(item.bcc || "");
+
     setForm({
-      to: item.to || "",
+      to: nextTo,
+      cc: nextCc,
+      bcc: nextBcc,
       subject: item.subject || "",
       body: latestTurn?.outgoing?.body || item.body || "",
     });
+    setShowCc(nextCc.length > 0);
+    setShowBcc(nextBcc.length > 0);
+
+    setManualTo(parseRawRecipients(latestTurn?.from || item.to || ""));
+    setManualCc(parseRawRecipients(latestTurn?.outgoing?.cc || item.cc || ""));
+    setManualBcc(parseRawRecipients(latestTurn?.outgoing?.bcc || item.bcc || ""));
 
     setLabelValue(item.label || "");
     setIsEditingLabel(false);
@@ -249,14 +327,21 @@ const EmailActionDetailContent = ({
       window.alert("Please enter a reply before sending.");
       return;
     }
-    const confirmed = window.confirm(`Send this manual reply to ${item.to}?`);
+    if (manualTo.length === 0) {
+      window.alert("Please enter at least one recipient email address.");
+      return;
+    }
+    const toNames = manualTo.map((r) => r.email).join(", ");
+    const confirmed = window.confirm(`Send this manual reply to ${toNames}?`);
     if (!confirmed) return;
 
     onManualSend(
       {
         id: item._id,
         body: manualReplyText.trim(),
-        to: item.to,
+        to: manualTo,
+        cc: manualCc,
+        bcc: manualBcc,
         subject: item.subject,
       },
       {
@@ -288,7 +373,7 @@ const EmailActionDetailContent = ({
 
   // Save draft changes (operates on latest turn's draft)
   const handleSave = () => {
-    if (!form.to.trim()) {
+    if (!form.to || form.to.length === 0) {
       window.alert("Please enter a recipient email address.");
       return;
     }
@@ -301,7 +386,9 @@ const EmailActionDetailContent = ({
     onUpdateDraft(
       {
         id: item._id,
-        to: form.to.trim(),
+        to: form.to,
+        cc: form.cc,
+        bcc: form.bcc,
         subject: form.subject.trim(),
         body: form.body,
       },
@@ -726,16 +813,133 @@ const EmailActionDetailContent = ({
                           </div>
                         )}
                         {isLatest && isEditing ? (
-                          <div className="mt-2 space-y-2">
-                            <textarea
-                              name="body"
-                              value={form.body}
-                              onChange={handleFieldChange}
-                              rows={8}
-                              maxLength={100000}
-                              className="w-full resize-y rounded-lg border border-slate-300 bg-white p-3 text-xs leading-5 text-slate-800 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                            />
-                            <div className="flex items-center gap-2">
+                          <div className="mt-2 space-y-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900/60">
+                            {/* To field with Cc / Bcc links */}
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                  To:
+                                </label>
+                                <div className="flex items-center gap-2 text-xs">
+                                  {draftUnaddedSuggested.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={handleAddReplyAllToDraft}
+                                      className="text-xs font-semibold text-blue-600 hover:text-blue-500 hover:underline dark:text-blue-400"
+                                    >
+                                      Add reply-all recipients (+{draftUnaddedSuggested.length})
+                                    </button>
+                                  )}
+                                  {!showCc && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowCc(true)}
+                                      className="text-xs text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                                    >
+                                      Cc
+                                    </button>
+                                  )}
+                                  {!showBcc && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowBcc(true)}
+                                      className="text-xs text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                                    >
+                                      Bcc
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              <EmailChipInput
+                                value={form.to}
+                                onChange={(next) => setForm((c) => ({ ...c, to: next }))}
+                                placeholder="Enter recipient..."
+                              />
+                            </div>
+
+                            {/* Cc field */}
+                            {showCc && (
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Cc:
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setShowCc(false);
+                                      setForm((c) => ({ ...c, cc: [] }));
+                                    }}
+                                    className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                                  >
+                                    Remove Cc
+                                  </button>
+                                </div>
+                                <EmailChipInput
+                                  value={form.cc}
+                                  onChange={(next) => setForm((c) => ({ ...c, cc: next }))}
+                                  placeholder="Add CC recipient..."
+                                />
+                              </div>
+                            )}
+
+                            {/* Bcc field */}
+                            {showBcc && (
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Bcc:
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setShowBcc(false);
+                                      setForm((c) => ({ ...c, bcc: [] }));
+                                    }}
+                                    className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                                  >
+                                    Remove Bcc
+                                  </button>
+                                </div>
+                                <EmailChipInput
+                                  value={form.bcc}
+                                  onChange={(next) => setForm((c) => ({ ...c, bcc: next }))}
+                                  placeholder="Add BCC recipient..."
+                                />
+                              </div>
+                            )}
+
+                            {/* Subject */}
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                Subject:
+                              </label>
+                              <input
+                                type="text"
+                                name="subject"
+                                value={form.subject}
+                                onChange={handleFieldChange}
+                                maxLength={998}
+                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800 outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-slate-200"
+                              />
+                            </div>
+
+                            {/* Body */}
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                Message:
+                              </label>
+                              <textarea
+                                name="body"
+                                value={form.body}
+                                onChange={handleFieldChange}
+                                rows={8}
+                                maxLength={100000}
+                                className="w-full resize-y rounded-lg border border-slate-300 bg-white p-3 text-xs leading-5 text-slate-800 outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-slate-200"
+                              />
+                            </div>
+
+                            <div className="flex items-center gap-2 pt-1">
                               <Button
                                 variant="success"
                                 onClick={handleSave}
@@ -748,13 +952,17 @@ const EmailActionDetailContent = ({
                                 variant="ghost"
                                 onClick={() => {
                                   setForm({
-                                    to: item.to || "",
+                                    to: initialTo,
+                                    cc: initialCc,
+                                    bcc: initialBcc,
                                     subject: item.subject || "",
                                     body:
                                       latestTurn?.outgoing?.body ||
                                       item.body ||
                                       "",
                                   });
+                                  setShowCc(initialCc.length > 0);
+                                  setShowBcc(initialBcc.length > 0);
                                   setIsEditing(false);
                                 }}
                                 disabled={isBusy}
@@ -764,10 +972,43 @@ const EmailActionDetailContent = ({
                             </div>
                           </div>
                         ) : (
-                          <div className="mt-2 whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-700 dark:border-zinc-800 dark:bg-zinc-950/60 dark:text-slate-200">
-                            {turnOutgoing?.body ||
-                              (isLatest ? item.body : "") ||
-                              "No outgoing body stored."}
+                          <div className="mt-2 space-y-2">
+                            {/* To and Cc recipients display */}
+                            {((turnOutgoing?.to && turnOutgoing.to.length > 0) ||
+                              (turnOutgoing?.cc && turnOutgoing.cc.length > 0)) && (
+                              <div className="space-y-0.5 rounded-md border border-slate-100 bg-slate-50/60 p-2 text-xs dark:border-zinc-800/80 dark:bg-zinc-950/40">
+                                {turnOutgoing?.to && turnOutgoing.to.length > 0 && (
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="font-semibold text-slate-500 dark:text-slate-400">
+                                      To:
+                                    </span>
+                                    <span className="text-slate-800 dark:text-slate-200">
+                                      {turnOutgoing.to
+                                        .map((r) => (r.name ? `${r.name} <${r.email}>` : r.email))
+                                        .join(", ")}
+                                    </span>
+                                  </div>
+                                )}
+                                {turnOutgoing?.cc && turnOutgoing.cc.length > 0 && (
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="font-semibold text-slate-500 dark:text-slate-400">
+                                      Cc:
+                                    </span>
+                                    <span className="text-slate-700 dark:text-slate-300">
+                                      {turnOutgoing.cc
+                                        .map((r) => (r.name ? `${r.name} <${r.email}>` : r.email))
+                                        .join(", ")}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            <div className="whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-700 dark:border-zinc-800 dark:bg-zinc-950/60 dark:text-slate-200">
+                              {turnOutgoing?.body ||
+                                (isLatest ? item.body : "") ||
+                                "No outgoing body stored."}
+                            </div>
                           </div>
                         )}
 
@@ -854,10 +1095,100 @@ const EmailActionDetailContent = ({
 
                           {/* Compose box for manual reply */}
                           {isLatest && (
-                            <div className="mt-4 space-y-2.5 border-t border-rose-100 pt-3 dark:border-zinc-800">
-                              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
-                                Compose manual reply
-                              </label>
+                            <div className="mt-4 space-y-3 border-t border-rose-100 pt-3 dark:border-zinc-800">
+                              <div className="flex items-center justify-between">
+                                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                                  Compose manual reply
+                                </label>
+                                <div className="flex items-center gap-2 text-xs">
+                                  {manualUnaddedSuggested.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={handleAddReplyAllToManual}
+                                      className="text-xs font-semibold text-blue-600 hover:text-blue-500 hover:underline dark:text-blue-400"
+                                    >
+                                      Add reply-all recipients (+{manualUnaddedSuggested.length})
+                                    </button>
+                                  )}
+                                  {!showManualCc && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowManualCc(true)}
+                                      className="text-xs text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                                    >
+                                      Cc
+                                    </button>
+                                  )}
+                                  {!showManualBcc && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowManualBcc(true)}
+                                      className="text-xs text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                                    >
+                                      Bcc
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* To field */}
+                              <div className="space-y-1">
+                                <span className="text-[10px] font-semibold uppercase text-slate-400">To</span>
+                                <EmailChipInput
+                                  value={manualTo}
+                                  onChange={setManualTo}
+                                  placeholder="Recipient..."
+                                />
+                              </div>
+
+                              {/* Cc field */}
+                              {showManualCc && (
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-semibold uppercase text-slate-400">Cc</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setShowManualCc(false);
+                                        setManualCc([]);
+                                      }}
+                                      className="text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                                    >
+                                      Remove Cc
+                                    </button>
+                                  </div>
+                                  <EmailChipInput
+                                    value={manualCc}
+                                    onChange={setManualCc}
+                                    placeholder="Add CC recipient..."
+                                  />
+                                </div>
+                              )}
+
+                              {/* Bcc field */}
+                              {showManualBcc && (
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-semibold uppercase text-slate-400">Bcc</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setShowManualBcc(false);
+                                        setManualBcc([]);
+                                      }}
+                                      className="text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                                    >
+                                      Remove Bcc
+                                    </button>
+                                  </div>
+                                  <EmailChipInput
+                                    value={manualBcc}
+                                    onChange={setManualBcc}
+                                    placeholder="Add BCC recipient..."
+                                  />
+                                </div>
+                              )}
+
                               <textarea
                                 value={manualReplyText}
                                 onChange={(e) => setManualReplyText(e.target.value)}
