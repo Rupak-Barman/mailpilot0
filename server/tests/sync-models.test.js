@@ -1,13 +1,17 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import dns from "node:dns";
+import "../config/network.js";
 import User from "../models/User.js";
 import ProcessedEmail from "../models/ProcessedEmail.js";
 import {
   isInvalidGrantError,
+  isTransientError,
   handleInvalidGrant,
   getOAuth2Client,
   getGmail,
   withGmail,
+  modifyMessageLabels,
   InvalidGrantError,
   getProfile,
   listHistory
@@ -17,6 +21,12 @@ import {
   checkOllamaHealth
 } from "../services/ollama.service.js";
 import { handleGetSyncStatus } from "../routes/sync.routes.js";
+
+describe("Network config - DNS result order", () => {
+  it("sets dns.getDefaultResultOrder() to ipv4first", () => {
+    assert.equal(dns.getDefaultResultOrder(), "ipv4first");
+  });
+});
 
 describe("Data Models - User and ProcessedEmail additions", () => {
   it("User schema contains sync and history fields", () => {
@@ -203,6 +213,124 @@ describe("Gmail service - OAuth2 client & error handling", () => {
 
     const history = await listHistory(mockGmail, { startHistoryId: "12345" });
     assert.equal(history.historyId, "12345");
+  });
+
+  it("withGmail retries transient failures (e.g. ECONNRESET) with exponential backoff and succeeds after 2 failures", async () => {
+    let attempts = 0;
+    const retryDelays = [];
+    const mockGmail = { users: {} };
+
+    const result = await withGmail(
+      mockGmail,
+      async () => {
+        attempts++;
+        if (attempts <= 2) {
+          const err = new Error("read ECONNRESET");
+          err.code = "ECONNRESET";
+          throw err;
+        }
+        return "success";
+      },
+      {
+        retryDelayFn: (idx) => {
+          retryDelays.push(idx);
+          return 5;
+        }
+      }
+    );
+
+    assert.equal(result, "success");
+    assert.equal(attempts, 3);
+    assert.deepEqual(retryDelays, [0, 1]);
+  });
+
+  it("withGmail retries up to maxRetries (3) and throws when all attempts fail", async () => {
+    let attempts = 0;
+    const mockGmail = { users: {} };
+
+    await assert.rejects(
+      async () => {
+        await withGmail(
+          mockGmail,
+          async () => {
+            attempts++;
+            const err = new Error("connect ETIMEDOUT");
+            err.code = "ETIMEDOUT";
+            throw err;
+          },
+          {
+            retryDelayFn: () => 5
+          }
+        );
+      },
+      (err) => {
+        assert.equal(err.code, "ETIMEDOUT");
+        return true;
+      }
+    );
+
+    assert.equal(attempts, 4); // 1 initial + 3 retries
+  });
+
+  it("withGmail does not retry non-transient errors (401, 403, 404, invalid_grant)", async () => {
+    let attempts = 0;
+    const mockGmail = { users: {} };
+
+    const notFoundErr = new Error("Not Found");
+    notFoundErr.status = 404;
+
+    await assert.rejects(
+      async () => {
+        await withGmail(
+          mockGmail,
+          async () => {
+            attempts++;
+            throw notFoundErr;
+          },
+          { retryDelayFn: () => 5 }
+        );
+      },
+      /Not Found/
+    );
+
+    assert.equal(attempts, 1);
+  });
+
+  it("modifyMessageLabels carries labels in requestBody, never in top-level query parameters", async () => {
+    let capturedArgs = null;
+    const mockGmail = {
+      users: {
+        messages: {
+          modify: async (args) => {
+            capturedArgs = args;
+            return {
+              data: {
+                id: args.id,
+                labels: args.requestBody?.addLabelIds
+              }
+            };
+          }
+        }
+      }
+    };
+
+    await modifyMessageLabels(mockGmail, {
+      messageId: "msg_123",
+      addLabelIds: ["Label_work"],
+      removeLabelIds: ["UNREAD"]
+    });
+
+    assert.ok(capturedArgs, "modify should have been called");
+    assert.equal(capturedArgs.userId, "me");
+    assert.equal(capturedArgs.id, "msg_123");
+    // Assert labels are placed inside requestBody
+    assert.deepEqual(capturedArgs.requestBody, {
+      addLabelIds: ["Label_work"],
+      removeLabelIds: ["UNREAD"]
+    });
+    // Assert labels are NOT in top-level parameters
+    assert.equal(capturedArgs.addLabelIds, undefined);
+    assert.equal(capturedArgs.removeLabelIds, undefined);
   });
 });
 

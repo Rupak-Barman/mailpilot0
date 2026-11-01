@@ -99,31 +99,123 @@ export const getGmail = async (user) => {
 };
 
 /**
- * Executes a function with a Gmail client. On invalid_grant error,
- * marks the user as needing re-login and rethrows a typed InvalidGrantError.
+ * Determine whether an error is transient and safe to retry.
+ * Transient: ECONNRESET, ETIMEDOUT, EAI_AGAIN, ECONNABORTED, HTTP 429, HTTP 5xx.
+ * Never retry: invalid_grant, 401, 403, 404.
  */
-export async function withGmail(userOrGmail, fn, maybeUser) {
+export const isTransientError = (error) => {
+  if (!error) return false;
+
+  if (isInvalidGrantError(error)) return false;
+
+  const status =
+    error?.status ||
+    error?.response?.status ||
+    (typeof error?.code === "number" ? error.code : null);
+
+  if (status === 401 || status === 403 || status === 404) {
+    return false;
+  }
+
+  if (status === 429 || (status >= 500 && status < 600)) {
+    return true;
+  }
+
+  const code = String(error?.code || error?.cause?.code || "");
+  const transientCodes = [
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EAI_AGAIN",
+    "ECONNABORTED"
+  ];
+
+  if (transientCodes.includes(code)) {
+    return true;
+  }
+
+  const msg = String(error?.message || "");
+  const causeMsg = error?.cause ? String(error.cause.message || "") : "";
+  for (const c of transientCodes) {
+    if (msg.includes(c) || causeMsg.includes(c)) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+const getBackoffDelay = (retryIndex) => {
+  const baseDelays = [500, 1500, 4000];
+  const base = baseDelays[retryIndex] ?? 4000;
+  const jitter = Math.floor(Math.random() * (base * 0.25));
+  return base + jitter;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Executes a function with a Gmail client.
+ * Retries transient failures with exponential backoff (up to 3 retries).
+ * On invalid_grant error, marks user as needing re-login and rethrows InvalidGrantError.
+ */
+export async function withGmail(userOrGmail, fn, maybeUser, options = {}) {
   let user = maybeUser;
   let gmail = userOrGmail;
+  let opts = options;
+
+  if (
+    maybeUser &&
+    typeof maybeUser === "object" &&
+    !maybeUser._id &&
+    !maybeUser.refreshToken &&
+    (maybeUser.maxRetries !== undefined ||
+      maybeUser.retryDelayFn !== undefined ||
+      maybeUser.onRetry !== undefined)
+  ) {
+    opts = maybeUser;
+    user = undefined;
+  }
 
   if (userOrGmail && !userOrGmail.users) {
     user = userOrGmail;
     gmail = await getGmail(user);
   }
 
-  try {
-    return await fn(gmail);
-  } catch (err) {
-    if (isInvalidGrantError(err)) {
-      if (user) {
-        await handleInvalidGrant(user, err);
+  const maxRetries = opts?.maxRetries ?? 3;
+  let attempt = 0;
+
+  while (true) {
+    try {
+      return await fn(gmail);
+    } catch (err) {
+      if (isInvalidGrantError(err)) {
+        if (user) {
+          await handleInvalidGrant(user, err);
+        }
+        throw new InvalidGrantError(
+          err?.message || "Authentication expired. Please re-login.",
+          err
+        );
       }
-      throw new InvalidGrantError(
-        err?.message || "Authentication expired. Please re-login.",
-        err
-      );
+
+      if (attempt < maxRetries && isTransientError(err)) {
+        attempt++;
+        const delay = opts?.retryDelayFn
+          ? opts.retryDelayFn(attempt - 1)
+          : getBackoffDelay(attempt - 1);
+        const reason = err?.code || err?.status || err?.message || "unknown";
+        console.warn(
+          `[gmail] Transient error (${reason}). Retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`
+        );
+        if (opts?.onRetry) {
+          opts.onRetry(err, attempt, delay);
+        }
+        await sleep(delay);
+        continue;
+      }
+
+      throw err;
     }
-    throw err;
   }
 }
 
@@ -396,4 +488,29 @@ export const setupDefaultLabels = async (user) => {
     }
     return user.labels;
   });
+};
+
+/**
+ * Modify labels on a message using requestBody (never top-level parameters).
+ */
+export const modifyMessageLabels = async (
+  gmailOrUser,
+  { messageId, addLabelIds = [], removeLabelIds = [] },
+  maybeUser
+) => {
+  return withGmail(
+    gmailOrUser,
+    async (gmail) => {
+      const response = await gmail.users.messages.modify({
+        userId: "me",
+        id: messageId,
+        requestBody: {
+          ...(addLabelIds?.length ? { addLabelIds } : {}),
+          ...(removeLabelIds?.length ? { removeLabelIds } : {})
+        }
+      });
+      return response.data;
+    },
+    maybeUser
+  );
 };

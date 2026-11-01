@@ -59,7 +59,9 @@ const processMessage = async ({ user, gmail, messageId }) => {
         await gmail.users.messages.modify({
           userId: "me",
           id: messageId,
-          removeLabelIds: ["UNREAD"]
+          requestBody: {
+            removeLabelIds: ["UNREAD"]
+          }
         });
       }
       return false;
@@ -101,7 +103,9 @@ const processMessage = async ({ user, gmail, messageId }) => {
     await gmail.users.messages.modify({
       userId: "me",
       id: messageId,
-      addLabelIds: [labelObj.id]
+      requestBody: {
+        addLabelIds: [labelObj.id]
+      }
     });
 
     const userAction = labelObj.action?.type || "none";
@@ -258,7 +262,9 @@ const processMessage = async ({ user, gmail, messageId }) => {
       await gmail.users.messages.modify({
         userId: "me",
         id: messageId,
-        removeLabelIds: ["UNREAD"]
+        requestBody: {
+          removeLabelIds: ["UNREAD"]
+        }
       });
     }
 
@@ -277,7 +283,9 @@ const processMessage = async ({ user, gmail, messageId }) => {
         await gmail.users.messages.modify({
           userId: "me",
           id: messageId,
-          removeLabelIds: ["UNREAD"]
+          requestBody: {
+            removeLabelIds: ["UNREAD"]
+          }
         });
       }
       return false;

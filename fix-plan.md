@@ -651,7 +651,7 @@ npm install helmet express-rate-limit --prefix server
 9. **Running the app** — dev and production modes
 10. **First-time setup** — login flow, adding labels and rules, knowledge documents
 11. **Important limitations** — 7-day refresh-token expiry applies to apps in "Testing" publishing status, not "unverified" apps (instruct users to set OAuth consent screen to "In production" for personal use); local-only server binding; daily reply cap
-12. **Troubleshooting** — Ollama not running, MongoDB connection, Gmail auth errors
+12. **Troubleshooting** — Ollama not running, MongoDB connection, Gmail auth errors; ECONNRESET when talking to Google: the network may reset IPv6; the app prefers IPv4 by default (PREFER_IPV4); test with node --dns-result-order=ipv4first
 13. **Contributing** — branch naming, PR checklist
 
 ### Risks

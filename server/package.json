@@ -20,6 +20,8 @@
   "type": "module",
   "main": "app.js",
   "scripts": {
+    "dev": "node --dns-result-order=ipv4first --watch app.js",
+    "start": "node --dns-result-order=ipv4first app.js",
     "test": "node --test \"tests/**/*.test.js\""
   },
   "keywords": [],
