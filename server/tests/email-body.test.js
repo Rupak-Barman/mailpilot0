@@ -208,10 +208,11 @@ describe("Email Body Formatting, Paragraph Normalization & Framing", () => {
   });
 
   it("7. frontend component verification: editor textarea and read-only views preserve line breaks with whitespace-pre-wrap", () => {
-    const detailComponentSrc = fs.readFileSync(
+    const rawSrc = fs.readFileSync(
       path.resolve(__dirname, "../../frontend/src/features/emailActions/EmailActionDetail.jsx"),
       "utf8"
     );
+    const detailComponentSrc = rawSrc.replace(/\r\n/g, "\n");
 
     // Verifies textarea is used for body editing
     assert.ok(
