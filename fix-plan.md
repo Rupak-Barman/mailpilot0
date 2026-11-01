@@ -545,6 +545,58 @@ Replaces reliance on pure interval polling with instant push notifications via S
 
 ---
 
+## Batch 5.6 – Gmail Reconcile
+
+### Problem
+Changes made directly in the Gmail app (editing, sending or deleting a draft, or replying by hand to an email the app could not answer) are not reflected in the app or in Analytics.
+
+### Design & Architecture
+1. **Reconciliation Service (`server/services/reconcile.service.js`):**
+   - Called from the poll cycle (`syncUser`) after the sync with its own try/catch, never blocking the sync, per-user, using `withGmail`.
+   - Rate-limited: each pending turn is checked at most once every 2 minutes (`outgoing.lastReconciledAt` / `turn.lastReconciledAt`) and at most 30 turns per run.
+2. **Draft reconciliation (`outgoing.status === "draft"`):**
+   - Calls `drafts.get(gmailDraftId)`.
+   - Exists: compares subject, to, cc, bcc, and body with stored values. If they differ, updates the stored copy, sets `outgoing.editedInGmail = true`, `outgoing.editedAt = now`, and updates `outgoing.gmailMessageId` (which changes on every edit in Gmail).
+   - 404: fetches the turn's `gmailThreadId` thread (`threads.get`, metadata format) and looks for a message with label `SENT` and `internalDate` after the draft's creation time.
+     - Found: marks the turn sent (`status: "sent"`, `sentAt` from internalDate, `gmailMessageId`, `sentFrom: "gmail"`, `outcome: "sent"`) and updates `ProcessedEmail` (`sentAt`, `resolvedAt`, `resolution: "ai_draft_sent"`).
+     - Not found: marks turn `outgoing.status = "deleted"` and `ProcessedEmail` `resolution: "none"`. Never marks sent on a guess.
+3. **Manual / Failed reconciliation (`outcome: "needs_manual" | "failed"` or no outgoing yet):**
+   - If the thread now has a `SENT` message after the turn's `receivedAt`, marks the turn resolved manually in Gmail (`resolution: "manual"`, `composedManually: true`, `sentFrom: "gmail"`, `outgoing.status: "sent"`, `outcome: "sent"`).
+   - Failed tab empties by itself and Analytics "Resolved manually" counts it.
+4. **Realtime Events:**
+   - Emits `emailAction.changed` and `analytics.changed` events via the event bus on every reconciled state mutation. Polling fallback remains active.
+5. **UI & Timeline Badges:**
+   - Shows "Sent from Gmail", "Edited in Gmail", and "Deleted in Gmail" badges in the detail timeline.
+   - Deleted drafts leave the Drafts tab counts (`type !== "draft"` and query exclusion) but stay visible under All.
+6. **Graceful App Actions on 404:**
+   - If `drafts.get`, `drafts.send`, or `drafts.delete` returns 404, runs reconcile for that turn and returns a clear descriptive message instead of 500.
+
+### Files changed / created
+| File | Role |
+|---|---|
+| `server/services/reconcile.service.js` | Core reconciliation service for draft and manual turn reconciliation |
+| `server/services/gmail.service.js` | Added `getGmailDraft` helper |
+| `server/utils/helpers.js` | Exported `decodeBase64Url` and `textFromPayload` |
+| `server/models/EmailAction.js` | Added `to`, `cc`, `bcc`, `subject`, `editedInGmail`, `editedAt`, `sentFrom`, `lastReconciledAt`, `createdAt` to `OutgoingTurnSchema`; `lastReconciledAt` to `TurnSchema` |
+| `server/jobs/poll.job.js` | Calls `reconcileUser` per-user after sync in `syncUser` with own try/catch |
+| `server/routes/emailAction.routes.js` | Reconcile fallback on 404 in send/update/delete draft; excluded deleted drafts from Drafts tab |
+| `frontend/src/features/emailActions/EmailActionDetail.jsx` | Added "Sent from Gmail", "Edited in Gmail", and "Deleted in Gmail" badges |
+| `frontend/src/utils/filterRules.js` | Added "deleted" status config and badge styling |
+| `server/tests/reconcile.test.js` | Tests with mocked Gmail for edits, sends, deletes, manual replies, sync isolation, rate limits, and 404 action handling |
+
+### Test plan
+- [x] Draft edited in Gmail updates stored fields, sets `editedInGmail=true`, and updates `gmailMessageId`.
+- [x] Draft sent in Gmail (404 + SENT message in thread) marks turn sent and updates `ProcessedEmail` with `ai_draft_sent`.
+- [x] Draft deleted in Gmail (404 + no SENT message) marks turn status deleted and `ProcessedEmail` resolution none.
+- [x] Manual reply to failed item resolves manually in Gmail and empties Failed tab.
+- [x] Reconcile failure does not break the sync.
+- [x] Rate limiting: checks at most once every 2 minutes per turn, caps at 30 turns per run.
+- [x] App send and delete actions handle 404 via reconcile and return clear messages.
+- [x] Frontend production build compiles without errors.
+- [x] All 140 server tests pass with 0 failures.
+
+---
+
 ## Batch 6 – Email MIME / Formatting Fixes
 
 ### Issues fixed
@@ -946,6 +998,18 @@ These tests must pass before marking the fix plan complete.
 - [x] 5.5.6 Reconnect backoff with refetch on reconnect & Topbar "Live" / "Reconnecting..." indicator
 - [x] 5.5.7 Fallback to polling (20s on emailActions, 30s on analytics)
 - [x] 5.5.8 Unit & integration tests for event bus, SSE route, and debounce invalidation logic
+
+### Batch 5.6 – Gmail Reconcile
+- [x] 5.6.1 Create `server/services/reconcile.service.js` called from poll cycle per-user after sync with own try/catch and `withGmail`
+- [x] 5.6.2 Rate limit reconcile checks to at most once per 2 minutes per turn (`outgoing.lastReconciledAt`) and at most 30 turns per run
+- [x] 5.6.3 Draft reconcile: compare subject, to, cc, bcc, body; update stored copy, set `editedInGmail=true` and update `gmailMessageId`
+- [x] 5.6.4 Draft 404: search thread for SENT message after draft creation time; mark sent (`ai_draft_sent`) or deleted (`resolution: "none"`)
+- [x] 5.6.5 Manual/failed reconcile: search thread for SENT message after turn receivedAt; mark resolved manually in Gmail (`manual`)
+- [x] 5.6.6 Emit realtime events (`emailAction.changed`, `analytics.changed`) on reconciled changes
+- [x] 5.6.7 UI detail timeline badges ("Sent from Gmail", "Edited in Gmail", "Deleted in Gmail")
+- [x] 5.6.8 Deleted drafts leave Drafts tab counts but stay visible under All
+- [x] 5.6.9 App Send/Delete routes handle 404 via reconcile and return clear messages
+- [x] 5.6.10 Write mocked Gmail unit tests in `server/tests/reconcile.test.js`
 
 ### Batch 6 – MIME / Formatting
 - [x] 6.1 76-char base64 wrapping

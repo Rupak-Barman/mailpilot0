@@ -84,3 +84,4 @@ describe("BATCH 5.5: Event Bus (events.service.js)", () => {
     assert.equal(getSubscriberCount(user), 0);
   });
 });
+

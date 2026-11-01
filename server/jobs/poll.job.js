@@ -11,6 +11,7 @@ import {
 } from "../services/aiEngine.js";
 import { updateAnalytics } from "../services/analytics.service.js";
 import { publishUserEvent } from "../services/events.service.js";
+import { reconcileUser } from "../services/reconcile.service.js";
 import { getHeader, buildMimeMessage, stripQuotedAndHtml } from "../utils/helpers.js";
 
 // Configuration defaults
@@ -754,6 +755,8 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
 
         outgoing = {
           kind: "reply",
+          to: newestFrom,
+          subject: newestSubject,
           body: newestAi.body,
           bodyHtml: "",
           status: "sent",
@@ -761,6 +764,8 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
           gmailMessageId,
           rfcMessageId: sentRfcMessageId,
           sentAt: new Date(),
+          sentFrom: "app",
+          createdAt: new Date(),
           composedManually: false,
           inReplyTo: newestMessageHeaderId,
           references: newestReferences
@@ -788,12 +793,16 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
 
         outgoing = {
           kind: "draft",
+          to: newestFrom,
+          subject: newestSubject,
           body: newestAi.body,
           bodyHtml: "",
           status: "draft",
           gmailDraftId,
           gmailMessageId,
           sentAt: null,
+          sentFrom: "app",
+          createdAt: new Date(),
           composedManually: false,
           inReplyTo: newestMessageHeaderId,
           references: newestReferences
@@ -1273,6 +1282,13 @@ export const syncUser = async (user, options = {}) => {
     user.syncError = null;
     await user.save();
     publishUserEvent(user._id, { type: "sync.changed", at: Date.now() });
+
+    // Batch 5.6: Reconcile changes made directly in Gmail (own try/catch, never blocks sync)
+    try {
+      await reconcileUser(user, { gmail, ...options });
+    } catch (recErr) {
+      console.warn(`[poll] User ${user._id} reconcile error:`, recErr.message);
+    }
 
     return { success: true, processedCount, totalFound: messageItems.length };
   } catch (err) {

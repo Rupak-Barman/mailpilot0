@@ -128,7 +128,12 @@ export const getItemStatus = (item) => {
   const turns = Array.isArray(item.turns) ? item.turns : [];
   const latestTurn = turns.length > 0 ? turns[turns.length - 1] : null;
 
-  // 1. Failed
+  // 1. Deleted
+  if (latestTurn?.outgoing?.status === "deleted" || item.status === "deleted") {
+    return "deleted";
+  }
+
+  // 2. Failed
   const isFailed =
     latestTurn?.outcome === "failed" ||
     latestTurn?.outcome === "needs_manual" ||
@@ -137,14 +142,14 @@ export const getItemStatus = (item) => {
     latestTurn?.outgoing?.status === "failed";
   if (isFailed) return "failed";
 
-  // 2. Sent
+  // 3. Sent
   const isSent =
     latestTurn?.outgoing?.status === "sent" ||
     item.status === "sent" ||
     latestTurn?.outcome === "sent";
   if (isSent) return "sent";
 
-  // 3. Draft (pending review)
+  // 4. Draft (pending review)
   const isDraft =
     latestTurn?.outgoing?.status === "draft" ||
     (latestTurn?.outgoing?.kind === "draft" && !latestTurn?.outgoing?.status) ||
@@ -152,10 +157,10 @@ export const getItemStatus = (item) => {
     item.type === "draft";
   if (isDraft) return "draft";
 
-  // 4. Reviewed (checked off)
+  // 5. Reviewed (checked off)
   if (item.checked || item.status === "reviewed") return "reviewed";
 
-  // 5. Needs reply (incoming with no outgoing reply or draft yet)
+  // 6. Needs reply (incoming with no outgoing reply or draft yet)
   if (item.status === "needs_reply" || !latestTurn?.outgoing) return "needs_reply";
 
   return item.status || "draft";
@@ -167,6 +172,8 @@ export const getStatusBadgeConfig = (status) => {
       return { label: "Sent", tone: "emerald" };
     case "draft":
       return { label: "Draft", tone: "slate" };
+    case "deleted":
+      return { label: "Deleted", tone: "rose" };
     case "needs_reply":
       return { label: "Needs reply", tone: "amber" };
     case "failed":

@@ -12,6 +12,7 @@ import {
 import { getHeader, buildMimeMessage } from "../utils/helpers.js";
 import { generateEmailAnalysis } from "../services/aiEngine.js";
 import { publishUserEvent } from "../services/events.service.js";
+import { reconcileTurn } from "../services/reconcile.service.js";
 
 const router = express.Router();
 
@@ -152,6 +153,19 @@ export const buildEmailActionsFilter = ({ userId, checked, type, label, q, statu
     filter.$and.push({ $or: buildFailedFilter(userId).$or });
   } else if (tab === "draft" || type === "draft") {
     filter.type = "draft";
+    filter.$and = filter.$and || [];
+    filter.$and.push({
+      $or: [
+        {
+          turns: { $exists: true, $not: { $size: 0 } },
+          $expr: {
+            $ne: [{ $arrayElemAt: ["$turns.outgoing.status", -1] }, "deleted"]
+          }
+        },
+        { turns: { $size: 0 } },
+        { turns: { $exists: false } }
+      ]
+    });
   } else if (tab === "reply" || type === "reply") {
     filter.type = "reply";
   }
@@ -281,7 +295,15 @@ export const handleGetSummary = async (req, res) => {
 
   const [unchecked, drafts, replies, failed, total] = await Promise.all([
     EmailAction.countDocuments({ userId, checked: false }),
-    EmailAction.countDocuments({ userId, type: "draft" }),
+    EmailAction.countDocuments({
+      userId,
+      type: "draft",
+      $or: [
+        { "turns.outgoing.status": { $ne: "deleted" } },
+        { turns: { $size: 0 } },
+        { turns: { $exists: false } }
+      ]
+    }),
     EmailAction.countDocuments({ userId, type: "reply" }),
     EmailAction.countDocuments(buildFailedFilter(userId)),
     EmailAction.countDocuments({ userId }),
@@ -483,7 +505,7 @@ router.patch("/:id/label", auth, async (req, res) => {
   }
 });
 
-router.post("/:id/send", auth, async (req, res) => {
+export const handleSendDraft = async (req, res) => {
   try {
     const action = await EmailAction.findOne({
       _id: req.params.id,
@@ -561,6 +583,27 @@ router.post("/:id/send", auth, async (req, res) => {
       });
     } catch (error) {
       console.error("Gmail draft sending failed:", error.message);
+
+      const status = error.status || error.response?.status;
+      if (status === 404 || error.message?.includes("404") || error.message?.includes("Not Found")) {
+        const recResult = await reconcileTurn(user, action, draftTurn, { gmail }).catch(() => null);
+        if (recResult?.status === "sent") {
+          return res.status(409).json({
+            message: "Draft was already sent directly in Gmail",
+            action
+          });
+        }
+        if (recResult?.status === "deleted") {
+          return res.status(409).json({
+            message: "Draft was deleted directly in Gmail",
+            action
+          });
+        }
+        return res.status(404).json({
+          message: "Draft no longer exists in Gmail",
+          action
+        });
+      }
 
       // A Google API response confirms rejection.
       // A network failure can have an uncertain send outcome.
@@ -656,7 +699,9 @@ router.post("/:id/send", auth, async (req, res) => {
       message: "Could not send the draft",
     });
   }
-});
+};
+
+router.post("/:id/send", auth, handleSendDraft);
 
 export const handleManualSend = async (req, res) => {
   try {
@@ -1111,6 +1156,27 @@ router.patch("/:id", auth, async (req, res) => {
   } catch (error) {
     console.error("Update draft error:", error.message);
 
+    const status = error.status || error.response?.status;
+    if (status === 404 || error.message?.includes("404") || error.message?.includes("Not Found")) {
+      const recResult = await reconcileTurn(user, action, draftTurn, { gmail }).catch(() => null);
+      if (recResult?.status === "sent") {
+        return res.status(409).json({
+          message: "Draft was already sent in Gmail and cannot be edited",
+          action
+        });
+      }
+      if (recResult?.status === "deleted") {
+        return res.status(409).json({
+          message: "Draft was deleted in Gmail and cannot be edited",
+          action
+        });
+      }
+      return res.status(404).json({
+        message: "Draft no longer exists in Gmail",
+        action
+      });
+    }
+
     return res.status(502).json({
       message: "Could not update the Gmail draft",
     });
@@ -1118,7 +1184,7 @@ router.patch("/:id", auth, async (req, res) => {
 });
 
 // Delete the Gmail draft and its MongoDB record.
-router.delete("/:id", auth, async (req, res) => {
+export const handleDeleteDraft = async (req, res) => {
   try {
     const action = await EmailAction.findOne({
       _id: req.params.id,
@@ -1171,26 +1237,35 @@ router.delete("/:id", auth, async (req, res) => {
 
     const gmail = await getGmail(user);
 
-    // Delete from Gmail before removing the database record.
-    await deleteGmailDraft(gmail, draftId);
-
-    // If there are multiple turns in the thread, mark this draft as deleted
-    // rather than deleting the whole thread history
-    if (Array.isArray(action.turns) && action.turns.length > 1) {
-      if (draftTurn) {
-        draftTurn.outgoing.status = "deleted";
+    // Delete from Gmail before updating the database record.
+    try {
+      await deleteGmailDraft(gmail, draftId);
+    } catch (error) {
+      const status = error.status || error.response?.status;
+      if (status === 404 || error.message?.includes("404") || error.message?.includes("Not Found")) {
+        const recResult = await reconcileTurn(user, action, draftTurn, { gmail }).catch(() => null);
+        if (recResult?.status === "sent") {
+          return res.status(409).json({
+            message: "Draft was already sent in Gmail and cannot be deleted",
+            id: action._id,
+          });
+        }
+        return res.json({
+          message: "Draft was already deleted in Gmail",
+          id: action._id,
+        });
       }
-      const prevTurn = action.turns[action.turns.length - 2];
-      action.status = prevTurn?.outgoing?.status === "sent" ? "sent" : "reviewed";
-      action.type = prevTurn?.outgoing?.kind || "reply";
-      action.gmailDraftId = null;
-      await action.save();
-    } else {
-      await EmailAction.deleteOne({
-        _id: action._id,
-        userId: req.user.id,
-      });
+      throw error;
     }
+
+    // Mark draft as deleted so it leaves Drafts tab counts but stays visible under All
+    if (draftTurn) {
+      draftTurn.outgoing.status = "deleted";
+    }
+    action.status = "reviewed";
+    action.type = "reply";
+    action.gmailDraftId = null;
+    await action.save();
 
     publishUserEvent(req.user.id, {
       type: "emailAction.changed",
@@ -1213,7 +1288,9 @@ router.delete("/:id", auth, async (req, res) => {
       message: "Could not delete the Gmail draft",
     });
   }
-});
+};
+
+router.delete("/:id", auth, handleDeleteDraft);
 
 
 export default router;

@@ -88,6 +88,8 @@ const getStatusTone = (status) => {
       return "amber";
     case "superseded":
       return "slate";
+    case "deleted":
+      return "rose";
     case "failed":
     case "send_failed":
       return "rose";
@@ -229,6 +231,7 @@ const EmailActionDetailContent = ({
   const cannotRetry = latestOutgoingStatus === "send_failed";
   const canEditDraft =
     isDraft &&
+    latestOutgoingStatus !== "deleted" &&
     (!latestOutgoingStatus ||
       latestOutgoingStatus === "draft" ||
       latestOutgoingStatus === "failed");
@@ -546,11 +549,19 @@ const EmailActionDetailContent = ({
                             {turn.from || item.to || "Unknown sender"}
                           </span>
                           {linkedTag}
-                          {turnOutgoing && (
+                          {turnOutgoing?.sentFrom === "gmail" && (
+                            <Badge tone="purple">Sent from Gmail</Badge>
+                          )}
+                          {turnOutgoing?.editedInGmail && (
+                            <Badge tone="amber">Edited in Gmail</Badge>
+                          )}
+                          {turnStatus === "deleted" ? (
+                            <Badge tone="rose">Deleted in Gmail</Badge>
+                          ) : turnOutgoing ? (
                             <Badge tone={getStatusTone(turnStatus)}>
                               {titleCase(turnStatus)}
                             </Badge>
-                          )}
+                          ) : null}
                         </div>
 
                         <div className="flex shrink-0 items-center gap-2">
@@ -688,9 +699,21 @@ const EmailActionDetailContent = ({
                             </span>
                           </div>
 
-                          <Badge tone={getStatusTone(turnStatus)}>
-                            {titleCase(turnStatus)}
-                          </Badge>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {turnStatus === "deleted" ? (
+                              <Badge tone="rose">Deleted in Gmail</Badge>
+                            ) : (
+                              <Badge tone={getStatusTone(turnStatus)}>
+                                {titleCase(turnStatus)}
+                              </Badge>
+                            )}
+                            {turnOutgoing?.sentFrom === "gmail" && (
+                              <Badge tone="purple">Sent from Gmail</Badge>
+                            )}
+                            {turnOutgoing?.editedInGmail && (
+                              <Badge tone="amber">Edited in Gmail</Badge>
+                            )}
+                          </div>
                         </div>
 
                         {/* Outgoing Body / Editor */}

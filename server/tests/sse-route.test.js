@@ -67,3 +67,4 @@ describe("BATCH 5.5: SSE Route (events.routes.js)", () => {
     assert.equal(getSubscriberCount(userId), 0);
   });
 });
+

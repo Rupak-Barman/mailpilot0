@@ -5,6 +5,33 @@ export const getHeader = (email, name) =>
     (h) => h.name?.toLowerCase() === name?.toLowerCase()
   )?.value || "";
 
+export const decodeBase64Url = (value = "") =>
+  Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+
+export const textFromPayload = (payload) => {
+  if (!payload) return "";
+
+  if (payload.mimeType === "text/plain" && payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+
+  if (payload.parts?.length) {
+    const plain = payload.parts
+      .map((part) => textFromPayload(part))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+
+    if (plain) return plain;
+  }
+
+  if (payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+
+  return "";
+};
+
 /**
  * Strips quoted email history ("On ... wrote:", lines starting with ">") and HTML tags,
  * and truncates the body to 4000 characters.

@@ -69,3 +69,4 @@ export const handleEventsStream = (req, res) => {
 router.get("/", auth, handleEventsStream);
 
 export default router;
+

@@ -30,6 +30,10 @@ const OutgoingTurnSchema = new mongoose.Schema(
       type: String,
       enum: ["draft", "reply"]
     },
+    to: String,
+    cc: String,
+    bcc: String,
+    subject: String,
     body: String, // plain text
     bodyHtml: String, // HTML version
     status: {
@@ -41,6 +45,20 @@ const OutgoingTurnSchema = new mongoose.Schema(
     gmailMessageId: String,
     rfcMessageId: String, // RFC Message-ID of the sent message
     sentAt: Date,
+    sentFrom: {
+      type: String,
+      enum: ["app", "gmail"]
+    },
+    editedInGmail: {
+      type: Boolean,
+      default: false
+    },
+    editedAt: Date,
+    lastReconciledAt: Date,
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
     composedManually: {
       type: Boolean,
       default: false
@@ -83,7 +101,9 @@ const TurnSchema = new mongoose.Schema(
     failureReason: String,
 
     // Outgoing side (only present for draft/sent turns)
-    outgoing: OutgoingTurnSchema
+    outgoing: OutgoingTurnSchema,
+
+    lastReconciledAt: Date
   },
   { _id: false }
 );

@@ -335,6 +335,33 @@ export const updateGmailDraft = async (
 };
 
 /**
+ * Retrieve an existing Gmail draft.
+ */
+export const getGmailDraft = async (
+  gmailOrUser,
+  draftId,
+  maybeUser,
+  options = {}
+) => {
+  if (!draftId) {
+    throw new Error("Gmail draft ID is missing");
+  }
+
+  return withGmail(
+    gmailOrUser,
+    async (gmail) => {
+      const response = await gmail.users.drafts.get({
+        userId: "me",
+        id: draftId,
+        format: options.format || "full"
+      });
+      return response.data;
+    },
+    maybeUser
+  );
+};
+
+/**
  * Send an existing Gmail draft.
  */
 export const sendGmailDraft = async (
