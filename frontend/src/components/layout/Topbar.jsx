@@ -1,17 +1,69 @@
 import { FiMoon, FiSun } from "react-icons/fi";
 import { Button } from "../common/Button";
 import { useAuth } from "../../hooks/useAuth";
+import { useSyncStatus } from "../../hooks/useSyncStatus";
 
 export const Topbar = ({ email }) => {
   const { theme, setTheme } = useAuth();
   const nextTheme = theme === "dark" ? "light" : "dark";
+  const { data: syncData, isLoading, isError } = useSyncStatus();
+
+  let dotColor = "bg-emerald-500";
+  let statusText = "Synced";
+  let textColor = "text-slate-500 dark:text-slate-400";
+  let tooltip = "Gmail sync is up to date";
+
+  if (isLoading) {
+    dotColor = "bg-slate-400 animate-pulse";
+    statusText = "Checking sync...";
+    textColor = "text-slate-400 dark:text-slate-500";
+    tooltip = "Checking sync status...";
+  } else if (isError) {
+    dotColor = "bg-rose-500";
+    statusText = "Sync offline";
+    textColor = "text-rose-500 dark:text-rose-400";
+    tooltip = "Unable to reach server sync endpoint";
+  } else if (syncData?.needsRelogin) {
+    dotColor = "bg-amber-500 animate-pulse";
+    statusText = "Re-login required";
+    textColor = "text-amber-600 dark:text-amber-400";
+    tooltip = "Google credentials expired. Please log out and back in.";
+  } else if (syncData?.ollamaReachable === false) {
+    dotColor = "bg-amber-500";
+    statusText = "AI offline";
+    textColor = "text-amber-600 dark:text-amber-400";
+    tooltip = "Ollama is unreachable. Automatic replies and drafts are paused.";
+  } else if (syncData?.status === "running") {
+    dotColor = "bg-emerald-500 animate-pulse";
+    statusText =
+      syncData?.queueSize > 0
+        ? `Syncing (${syncData.queueSize})`
+        : "Syncing...";
+    textColor = "text-emerald-600 dark:text-emerald-400";
+    tooltip = "Processing incoming emails";
+  } else if (syncData?.status === "error") {
+    dotColor = "bg-rose-500";
+    statusText = "Sync error";
+    textColor = "text-rose-600 dark:text-rose-400";
+    tooltip = syncData?.error || "An error occurred during sync";
+  } else {
+    dotColor = "bg-emerald-500";
+    statusText = "Synced";
+    textColor = "text-slate-500 dark:text-slate-400";
+    tooltip = syncData?.lastSync
+      ? `Last synced: ${new Date(syncData.lastSync).toLocaleTimeString()}`
+      : "Sync idle";
+  }
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-950 lg:pl-72 lg:pr-7">
       {/* Left: sync status */}
-      <div className="flex items-center gap-2 text-xs font-medium text-slate-400 dark:text-slate-500">
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-        Syncing
+      <div
+        className={`flex items-center gap-2 text-xs font-medium ${textColor}`}
+        title={tooltip}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} />
+        {statusText}
       </div>
 
       {/* Right: controls */}
@@ -22,9 +74,11 @@ export const Topbar = ({ email }) => {
           onClick={() => setTheme(nextTheme)}
           aria-label="Toggle theme"
         >
-          {theme === "dark"
-            ? <FiSun className="h-4 w-4" />
-            : <FiMoon className="h-4 w-4" />}
+          {theme === "dark" ? (
+            <FiSun className="h-4 w-4" />
+          ) : (
+            <FiMoon className="h-4 w-4" />
+          )}
         </Button>
 
         {email && (

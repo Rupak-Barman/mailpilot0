@@ -808,13 +808,13 @@ These tests must pass before marking the fix plan complete.
 ## Checklist Summary
 
 ### Batch 1 – Sync Engine
-- [ ] 1.1 Add `gmailHistoryId` + sync fields to `User.js`
-- [ ] 1.2 Add `status`/`outcome`/`failureReason` to `ProcessedEmail.js`
-- [ ] 1.3 Refactor `gmail.service.js` to googleapis OAuth2 client
+- [x] 1.1 Add `gmailHistoryId` + sync fields to `User.js`
+- [x] 1.2 Add `status`/`outcome`/`failureReason` to `ProcessedEmail.js`
+- [x] 1.3 Refactor `gmail.service.js` to googleapis OAuth2 client
 - [ ] 1.4 Rewrite `poll.job.js` (history.list, lock, retry, loop protection)
-- [ ] 1.5 Add `/sync-status` route
-- [ ] 1.6 Ollama health check on startup
-- [ ] 1.7 Real sync status in `Topbar.jsx`
+- [x] 1.5 Add `/sync-status` route
+- [x] 1.6 Ollama health check on startup
+- [x] 1.7 Real sync status in `Topbar.jsx`
 
 ### Batch 2 – Conversation Model
 - [ ] 2.1 Redesign `EmailAction.js` with `turns[]`

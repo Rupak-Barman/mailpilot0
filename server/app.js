@@ -12,11 +12,13 @@ import emailActionRoutes from "./routes/emailAction.routes.js";
 import profileRoutes from "./routes/profile.routes.js";
 import knowledgeRoutes from "./routes/knowledge.routes.js";
 import personaRoutes from "./routes/persona.routes.js";
+import syncRoutes from "./routes/sync.routes.js";
+import { checkOllamaHealth } from "./services/ollama.service.js";
 
 dotenv.config();
 const app = express();
 
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({ origin: process.env.CLIENT_URL || "http://localhost:5173" }));
 app.use(express.json());
 app.use(passport.initialize());
 
@@ -27,9 +29,18 @@ app.use("/email-actions", emailActionRoutes);
 app.use("/profile", profileRoutes);
 app.use("/knowledge", knowledgeRoutes);
 app.use("/personas", personaRoutes);
+app.use("/sync-status", syncRoutes);
 app.get("/health", (_, res) => res.send("OK"));
 
-connectDB().then(() => {
-  app.listen(3000, () => console.log("Server running"));
-  startPolling();
-});
+if (process.env.NODE_ENV !== "test") {
+  connectDB().then(async () => {
+    await checkOllamaHealth();
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, "127.0.0.1", () =>
+      console.log(`Server running on http://127.0.0.1:${PORT}`)
+    );
+    startPolling();
+  });
+}
+
+export default app;

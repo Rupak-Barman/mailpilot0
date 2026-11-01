@@ -36,6 +36,40 @@ const UserSchema = new mongoose.Schema({
     maxlength: 2000
   },
 
+  gmailHistoryId: {
+    type: String,
+    default: null
+  },
+  syncStatus: {
+    type: String,
+    enum: ["idle", "running", "error"],
+    default: "idle"
+  },
+  syncError: {
+    type: String,
+    default: null
+  },
+  lastSync: {
+    type: Date,
+    default: null
+  },
+  lastSyncAt: {
+    type: Date,
+    default: null
+  },
+  needsRelogin: {
+    type: Boolean,
+    default: false
+  },
+  dailyReplySentCount: {
+    type: Number,
+    default: 0
+  },
+  dailyReplySentDate: {
+    type: Date,
+    default: null
+  },
+
   personas: {
     type: [WritingPersonaSchema],
     default: []
