@@ -6,9 +6,60 @@ export const getHeader = (email, name) =>
   )?.value || "";
 
 /**
- * Wraps a base64 string at 76 characters per line using CRLF (\r\n),
- * per RFC 2045.
+ * Strips quoted email history ("On ... wrote:", lines starting with ">") and HTML tags,
+ * and truncates the body to 4000 characters.
  */
+export const stripQuotedAndHtml = (text = "") => {
+  if (!text) return "";
+  let cleaned = String(text);
+
+  // 1. Replace block tags and breaks with newlines before stripping other tags
+  cleaned = cleaned.replace(/<\s*(?:br|\/p|\/div|\/tr|\/h[1-6])\s*\/?>/gi, "\n");
+
+  // 2. Strip remaining HTML tags
+  cleaned = cleaned.replace(/<[^>]+>/g, " ");
+
+  // 3. Decode common HTML entities
+  cleaned = cleaned
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'");
+
+  // Normalize line endings
+  cleaned = cleaned.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  // 4. Cut off at "On ... wrote:" or "-----Original Message-----"
+  const onWroteIdx = cleaned.search(/(?:^|\n)\s*On\s+[\s\S]+?wrote:\s*/i);
+  if (onWroteIdx !== -1) {
+    cleaned = cleaned.slice(0, onWroteIdx);
+  }
+
+  const origMsgIdx = cleaned.search(/(?:^|\n)\s*-+\s*Original Message\s*-+/i);
+  if (origMsgIdx !== -1) {
+    cleaned = cleaned.slice(0, origMsgIdx);
+  }
+
+  // 5. Strip lines starting with ">"
+  cleaned = cleaned
+    .split("\n")
+    .filter((line) => !/^\s*>/.test(line))
+    .map((line) => line.trim())
+    .join("\n");
+
+  // 6. Collapse 3+ consecutive newlines to 2 and trim
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
+
+  // 7. Truncate to 4000 characters
+  if (cleaned.length > 4000) {
+    cleaned = cleaned.slice(0, 4000);
+  }
+
+  return cleaned;
+};
+
 export const wrapBase64 = (b64 = "") => {
   if (!b64) return "";
   return String(b64).replace(/(.{76})/g, "$1\r\n").trimEnd();

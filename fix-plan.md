@@ -818,8 +818,8 @@ These tests must pass before marking the fix plan complete.
 
 ### Batch 2 – Conversation Model
 - [x] 2.1 Redesign `EmailAction.js` with `turns[]`
-- [ ] 2.2 Update `poll.job.js` to write turns
-- [ ] 2.3 Update `emailAction.routes.js` for new schema
+- [x] 2.2 Update `poll.job.js` to write turns
+- [x] 2.3 Update `emailAction.routes.js` for new schema
 - [x] 2.4 Write `server/tools/migrate-email-actions.js`
 - [ ] 2.5 Write `server/tools/backfill-summaries.js`
 - [ ] 2.6 Update `EmailActionDetail.jsx` (timeline, no duplicate badge, real sender)

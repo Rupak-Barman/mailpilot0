@@ -4,13 +4,13 @@ import cron from "node-cron";
 import User from "../models/User.js";
 import ProcessedEmail from "../models/ProcessedEmail.js";
 import EmailAction from "../models/EmailAction.js";
-import { getGmail, withGmail } from "../services/gmail.service.js";
+import { getGmail, withGmail, deleteGmailDraft } from "../services/gmail.service.js";
 import {
   analyzeEmailAI,
   isTransientAIError
 } from "../services/aiEngine.js";
 import { updateAnalytics } from "../services/analytics.service.js";
-import { getHeader, buildMimeMessage } from "../utils/helpers.js";
+import { getHeader, buildMimeMessage, stripQuotedAndHtml } from "../utils/helpers.js";
 
 // Configuration defaults
 const CATCHUP_HOURS = Number(process.env.CATCHUP_HOURS) || 48;
@@ -350,6 +350,16 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
 
     const newestEntry = validEmailEntries[validEmailEntries.length - 1];
     const olderEntries = validEmailEntries.slice(0, validEmailEntries.length - 1);
+    const effectiveThreadId = newestEntry.email.threadId || threadId;
+
+    // Check for existing thread action to pass conversation history context
+    const existingThreadAction = effectiveThreadId
+      ? await EmailAction.findOne({
+          userId: userIdStr,
+          threadId: effectiveThreadId
+        })
+      : null;
+    const previousTurns = existingThreadAction?.turns || [];
 
     // Summarise each message using AI
     for (const entry of validEmailEntries) {
@@ -357,7 +367,8 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
       const subject = getHeader(email, "Subject");
       const from = getHeader(email, "From");
       const snippet = email.snippet || "";
-      const bodyText = textFromPayload(email.payload) || snippet;
+      const rawBody = textFromPayload(email.payload) || snippet;
+      const bodyText = stripQuotedAndHtml(rawBody || snippet);
 
       try {
         const aiRes = await analyzeEmailAI({
@@ -368,7 +379,8 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
           bodyText,
           userProfileDescription: user.profileDescription,
           labels: enabledLabels,
-          personas: user.personas || []
+          personas: user.personas || [],
+          previousTurns
         });
         entry.aiResult = aiRes;
         entry.summary = aiRes.summary || snippet || "Incoming email message.";
@@ -390,6 +402,46 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
             await doc.save();
           }
         }
+
+        // Actions "failed" still create a turn if permanent failure
+        if (!isTransient || (newestEntry.claimDoc.attempts || 1) >= 3) {
+          try {
+            const failedTurn = {
+              incomingMessageId: newestEntry.item.id,
+              from: getHeader(newestEntry.email, "From"),
+              receivedAt: new Date(Number(newestEntry.email.internalDate || Date.now())),
+              incomingSubject: getHeader(newestEntry.email, "Subject"),
+              incomingSnippet: (newestEntry.email.snippet || "").slice(0, 500),
+              incomingSummary: newestEntry.email.snippet || "Incoming email message.",
+              label: "failed",
+              outcome: "failed",
+              failureReason: isTransient ? "ai_unavailable" : (aiErr.message || "ai_permanent_error")
+            };
+            if (existingThreadAction) {
+              existingThreadAction.turns.push(failedTurn);
+              existingThreadAction.status = "failed";
+              existingThreadAction.type = "failed";
+              existingThreadAction.checked = false;
+              await existingThreadAction.save();
+            } else {
+              await EmailAction.create({
+                userId: userIdStr,
+                threadId: effectiveThreadId,
+                turns: [failedTurn],
+                status: "failed",
+                type: "failed",
+                checked: false,
+                to: getHeader(newestEntry.email, "From"),
+                subject: getHeader(newestEntry.email, "Subject"),
+                summary: failedTurn.incomingSummary,
+                sourceMessageId: newestEntry.item.id
+              });
+            }
+          } catch (recErr) {
+            console.warn("[poll] Could not record failed EmailAction turn:", recErr.message);
+          }
+        }
+
         return {
           processed: false,
           outcome: isTransient && (newestEntry.claimDoc.attempts || 1) < 3 ? "retry" : "failed",
@@ -480,9 +532,31 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     const newestFrom = getHeader(newestEmail, "From");
     const newestMessageHeaderId = getHeader(newestEmail, "Message-ID");
     const newestReferences = getHeader(newestEmail, "References") || newestMessageHeaderId;
-    const effectiveThreadId = newestEmail.threadId || threadId;
 
     // 8. Reply or Draft to the newest message
+    // Check if previous outgoing in this thread is an unsent draft
+    let previousDraftTurn = null;
+    if (existingThreadAction && Array.isArray(existingThreadAction.turns) && existingThreadAction.turns.length > 0) {
+      const lastTurn = existingThreadAction.turns[existingThreadAction.turns.length - 1];
+      if (lastTurn && lastTurn.outgoing && lastTurn.outgoing.status === "draft") {
+        previousDraftTurn = lastTurn;
+      }
+    }
+
+    if (previousDraftTurn && previousDraftTurn.outgoing?.gmailDraftId) {
+      // If the previous outgoing is an UNSENT draft: delete that Gmail draft through withGmail,
+      // mark its turn outgoing.status "superseded", then create the new draft.
+      try {
+        await deleteGmailDraft(gmail || user, previousDraftTurn.outgoing.gmailDraftId, user);
+        console.log(`[poll] Deleted superseded Gmail draft ${previousDraftTurn.outgoing.gmailDraftId}`);
+      } catch (draftDelErr) {
+        console.warn(`[poll] Could not delete superseded Gmail draft:`, draftDelErr.message);
+      }
+      previousDraftTurn.outgoing.status = "superseded";
+    }
+
+    let outgoing = null;
+
     if (["reply", "draft"].includes(finalAction)) {
       const raw = buildMimeMessage({
         to: newestFrom,
@@ -524,6 +598,19 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
           user.dailyReplySentCount = 1;
         }
         await user.save().catch(() => {});
+
+        outgoing = {
+          kind: "reply",
+          body: newestAi.body,
+          bodyHtml: "",
+          status: "sent",
+          gmailDraftId: null,
+          gmailMessageId,
+          sentAt: new Date(),
+          composedManually: false,
+          inReplyTo: newestMessageHeaderId,
+          references: newestReferences
+        };
       }
 
       if (finalAction === "draft") {
@@ -544,103 +631,112 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
         );
         gmailDraftId = draft.data.id;
         gmailMessageId = draft.data.message?.id || "";
-      }
 
-      // Update / create EmailAction for the thread
-      const existingThreadAction = effectiveThreadId
-        ? await EmailAction.findOne({
-            userId: userIdStr,
-            threadId: effectiveThreadId
-          })
-        : null;
-
-      if (existingThreadAction) {
-        const history = [...(existingThreadAction.conversationHistory || [])];
-        if (history.length === 0 && existingThreadAction.body) {
-          history.push({
-            role: "incoming",
-            type: "summary",
-            content: existingThreadAction.summary || existingThreadAction.subject || "Original email",
-            messageId: existingThreadAction.sourceMessageId,
-            timestamp: existingThreadAction.createdAt || new Date()
-          });
-          history.push({
-            role: "outgoing",
-            type: existingThreadAction.type || "draft",
-            content: existingThreadAction.body,
-            timestamp: existingThreadAction.sentAt || existingThreadAction.updatedAt || new Date()
-          });
-        }
-
-        // Add incoming turns for all messages in the run
-        for (const entry of validEmailEntries) {
-          history.push({
-            role: "incoming",
-            type: "summary",
-            content: entry.summary,
-            messageId: entry.item.id,
-            timestamp: new Date()
-          });
-        }
-
-        // Add exactly ONE outgoing turn for the reply/draft
-        history.push({
-          role: "outgoing",
-          type: finalAction,
-          content: newestAi.body,
-          timestamp: new Date()
-        });
-
-        existingThreadAction.conversationHistory = history;
-        existingThreadAction.summary = newestEntry.summary;
-        existingThreadAction.body = newestAi.body;
-        existingThreadAction.sourceMessageId = newestEntry.item.id;
-        existingThreadAction.gmailMessageId = gmailMessageId;
-        existingThreadAction.gmailDraftId = gmailDraftId;
-        existingThreadAction.type = finalAction;
-        existingThreadAction.label = selectedLabelName;
-        existingThreadAction.status = finalAction === "reply" ? "sent" : "draft";
-        existingThreadAction.checked = false;
-        existingThreadAction.checkedAt = null;
-        existingThreadAction.sentAt = finalAction === "reply" ? new Date() : null;
-
-        await existingThreadAction.save();
-      } else {
-        const history = [];
-        for (const entry of validEmailEntries) {
-          history.push({
-            role: "incoming",
-            type: "summary",
-            content: entry.summary,
-            messageId: entry.item.id,
-            timestamp: new Date()
-          });
-        }
-        history.push({
-          role: "outgoing",
-          type: finalAction,
-          content: newestAi.body,
-          timestamp: new Date()
-        });
-
-        await EmailAction.create({
-          userId: userIdStr,
-          sourceMessageId: newestEntry.item.id,
-          gmailMessageId,
-          gmailDraftId,
-          threadId: effectiveThreadId,
-          type: finalAction,
-          label: selectedLabelName,
-          to: newestFrom,
-          subject: newestSubject,
-          summary: newestEntry.summary,
+        outgoing = {
+          kind: "draft",
           body: newestAi.body,
-          checked: false,
-          status: finalAction === "reply" ? "sent" : "draft",
-          sentAt: finalAction === "reply" ? new Date() : null,
-          conversationHistory: history
-        });
+          bodyHtml: "",
+          status: "draft",
+          gmailDraftId,
+          gmailMessageId,
+          sentAt: null,
+          composedManually: false,
+          inReplyTo: newestMessageHeaderId,
+          references: newestReferences
+        };
       }
+    }
+
+    // Build turns for older messages in this tick
+    const olderTurns = olderEntries.map((entry) => ({
+      incomingMessageId: entry.item.id,
+      from: getHeader(entry.email, "From"),
+      receivedAt: new Date(Number(entry.email.internalDate || Date.now())),
+      incomingSubject: getHeader(entry.email, "Subject"),
+      incomingSnippet: (entry.email.snippet || "").slice(0, 500),
+      incomingSummary: entry.summary,
+      label: selectedLabelName,
+      outcome: "labeled",
+      failureReason: null
+    }));
+
+    // Build turn for newest message
+    const newestOutcome = finalAction === "reply" ? "sent" : (finalAction === "draft" ? "drafted" : "none");
+    const newestTurn = {
+      incomingMessageId: newestEntry.item.id,
+      from: newestFrom,
+      receivedAt: new Date(Number(newestEmail.internalDate || Date.now())),
+      incomingSubject: newestSubject,
+      incomingSnippet: (newestEmail.snippet || "").slice(0, 500),
+      incomingSummary: newestEntry.summary,
+      label: selectedLabelName,
+      outcome: newestOutcome,
+      failureReason: null,
+      ...(outgoing ? { outgoing } : {})
+    };
+
+    const newTurns = [...olderTurns, newestTurn];
+
+    // Maintain conversationHistory for backward compatibility
+    const historyItems = [];
+    for (const entry of validEmailEntries) {
+      historyItems.push({
+        role: "incoming",
+        type: "summary",
+        content: entry.summary,
+        messageId: entry.item.id,
+        timestamp: new Date()
+      });
+    }
+    if (["reply", "draft"].includes(finalAction)) {
+      historyItems.push({
+        role: "outgoing",
+        type: finalAction,
+        content: newestAi.body,
+        timestamp: new Date()
+      });
+    }
+
+    if (existingThreadAction) {
+      // Append new turn(s); previous turns stay untouched
+      existingThreadAction.turns.push(...newTurns);
+      existingThreadAction.checked = false;
+      existingThreadAction.checkedAt = null;
+
+      const history = [...(existingThreadAction.conversationHistory || [])];
+      history.push(...historyItems);
+      existingThreadAction.conversationHistory = history;
+
+      existingThreadAction.summary = newestEntry.summary;
+      existingThreadAction.body = newestAi.body || "";
+      existingThreadAction.sourceMessageId = newestEntry.item.id;
+      existingThreadAction.gmailMessageId = gmailMessageId;
+      existingThreadAction.gmailDraftId = gmailDraftId;
+      existingThreadAction.type = finalAction;
+      existingThreadAction.label = selectedLabelName;
+      existingThreadAction.status = finalAction === "reply" ? "sent" : (finalAction === "draft" ? "draft" : "reviewed");
+      existingThreadAction.sentAt = finalAction === "reply" ? new Date() : null;
+
+      await existingThreadAction.save();
+    } else {
+      await EmailAction.create({
+        userId: userIdStr,
+        sourceMessageId: newestEntry.item.id,
+        gmailMessageId,
+        gmailDraftId,
+        threadId: effectiveThreadId,
+        turns: newTurns,
+        type: finalAction,
+        label: selectedLabelName,
+        to: newestFrom,
+        subject: newestSubject,
+        summary: newestEntry.summary,
+        body: newestAi.body || "",
+        checked: false,
+        status: finalAction === "reply" ? "sent" : (finalAction === "draft" ? "draft" : "reviewed"),
+        sentAt: finalAction === "reply" ? new Date() : null,
+        conversationHistory: historyItems
+      });
     }
 
     // 9. Finalize claim documents for all messages

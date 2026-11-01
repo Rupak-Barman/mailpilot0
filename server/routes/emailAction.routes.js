@@ -1,6 +1,7 @@
 import express from "express";
 import auth from "../middleware/auth.js";
 import EmailAction from "../models/EmailAction.js";
+import ProcessedEmail from "../models/ProcessedEmail.js";
 import User from "../models/User.js";
 import {
   getGmail,
@@ -75,8 +76,19 @@ router.get("/", auth, async (req, res) => {
 
   if (checked === "true") filter.checked = true;
   if (checked === "false") filter.checked = false;
-  if (["reply", "draft"].includes(type)) filter.type = type;
-  if (["draft", "sending", "sent", "send_failed"].includes(status)) {
+  if (["reply", "draft", "none", "failed"].includes(type)) filter.type = type;
+  if (
+    [
+      "draft",
+      "sending",
+      "sent",
+      "send_failed",
+      "unread",
+      "needs_reply",
+      "failed",
+      "reviewed"
+    ].includes(status)
+  ) {
     filter.status = status;
   }
   if (label) filter.label = label;
@@ -87,13 +99,38 @@ router.get("/", auth, async (req, res) => {
       { to: { $regex: escapedQ, $options: "i" } },
       { body: { $regex: escapedQ, $options: "i" } },
       { summary: { $regex: escapedQ, $options: "i" } },
+      { "turns.incomingSubject": { $regex: escapedQ, $options: "i" } },
+      { "turns.incomingSummary": { $regex: escapedQ, $options: "i" } },
+      { "turns.outgoing.body": { $regex: escapedQ, $options: "i" } },
+      { "turns.from": { $regex: escapedQ, $options: "i" } }
     ];
   }
 
-  const [items, total] = await Promise.all([
+  const [rawItems, total] = await Promise.all([
     EmailAction.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
     EmailAction.countDocuments(filter),
   ]);
+
+  // Ensure response objects include both thread/turn structure and top-level fields
+  const items = rawItems.map((doc) => {
+    const obj = doc.toObject ? doc.toObject() : { ...doc };
+    if (Array.isArray(obj.turns) && obj.turns.length > 0) {
+      const latestTurn = obj.turns[obj.turns.length - 1];
+      if (latestTurn.outgoing) {
+        if (!obj.body) obj.body = latestTurn.outgoing.body || "";
+        if (!obj.gmailDraftId && latestTurn.outgoing.gmailDraftId) {
+          obj.gmailDraftId = latestTurn.outgoing.gmailDraftId;
+        }
+        if (!obj.gmailMessageId && latestTurn.outgoing.gmailMessageId) {
+          obj.gmailMessageId = latestTurn.outgoing.gmailMessageId;
+        }
+      }
+      if (!obj.summary && latestTurn.incomingSummary) {
+        obj.summary = latestTurn.incomingSummary;
+      }
+    }
+    return obj;
+  });
 
   res.json({
     items,
@@ -245,25 +282,37 @@ router.post("/:id/send", auth, async (req, res) => {
       });
     }
 
-    if (action.type !== "draft") {
+    // Determine the latest turn containing a draft
+    let draftTurn = null;
+    if (Array.isArray(action.turns) && action.turns.length > 0) {
+      const lastTurn = action.turns[action.turns.length - 1];
+      if (lastTurn && lastTurn.outgoing && lastTurn.outgoing.kind === "draft") {
+        draftTurn = lastTurn;
+      }
+    }
+
+    const isDraft = action.type === "draft" || (draftTurn && draftTurn.outgoing?.kind === "draft");
+    if (!isDraft) {
       return res.status(400).json({
         message: "Only saved drafts can be sent here",
       });
     }
 
-    if (action.status === "sent") {
+    const currentStatus = draftTurn ? draftTurn.outgoing.status : action.status;
+    if (currentStatus === "sent") {
       return res.status(409).json({
         message: "This draft has already been sent",
       });
     }
 
-    if (action.status === "sending" || action.status === "send_failed") {
+    if (currentStatus === "sending" || currentStatus === "send_failed" || currentStatus === "failed") {
       return res.status(409).json({
         message: "Previous send attempt needs verification",
       });
     }
 
-    if (!action.gmailDraftId) {
+    const draftId = draftTurn?.outgoing?.gmailDraftId || action.gmailDraftId;
+    if (!draftId) {
       return res.status(400).json({
         message: "Gmail draft ID is missing",
       });
@@ -280,24 +329,11 @@ router.post("/:id/send", auth, async (req, res) => {
     const gmail = await getGmail(user);
 
     // Atomically prevent double-clicks and duplicate sending.
-    const claimed = await EmailAction.findOneAndUpdate(
-      {
-        _id: action._id,
-        userId: req.user.id,
-        type: "draft",
-        $or: [{ status: "draft" }, { status: { $exists: false } }],
-      },
-      {
-        $set: { status: "sending" },
-      },
-      { new: true },
-    );
-
-    if (!claimed) {
-      return res.status(409).json({
-        message: "Draft is already being sent or has been sent",
-      });
+    if (draftTurn) {
+      draftTurn.outgoing.status = "sending";
     }
+    action.status = "sending";
+    await action.save();
 
     let sent;
 
@@ -306,7 +342,7 @@ router.post("/:id/send", auth, async (req, res) => {
       sent = await gmail.users.drafts.send({
         userId: "me",
         requestBody: {
-          id: claimed.gmailDraftId,
+          id: draftId,
         },
       });
     } catch (error) {
@@ -314,14 +350,12 @@ router.post("/:id/send", auth, async (req, res) => {
 
       // A Google API response confirms rejection.
       // A network failure can have an uncertain send outcome.
-      await EmailAction.updateOne(
-        { _id: claimed._id, status: "sending" },
-        {
-          $set: {
-            status: error.response ? "draft" : "send_failed",
-          },
-        },
-      );
+      const rollbackStatus = error.response ? "draft" : "failed";
+      if (draftTurn) {
+        draftTurn.outgoing.status = rollbackStatus;
+      }
+      action.status = error.response ? "draft" : "send_failed";
+      await action.save().catch(() => {});
 
       return res.status(502).json({
         message: error.response
@@ -330,27 +364,43 @@ router.post("/:id/send", auth, async (req, res) => {
       });
     }
 
-    const updated = await EmailAction.findOneAndUpdate(
-      {
-        _id: claimed._id,
-        userId: req.user.id,
-      },
-      {
-        $set: {
-          type: "reply",
-          status: "sent",
-          sentAt: new Date(),
-          gmailMessageId: sent.data.id,
-          checked: true,
-          checkedAt: new Date(),
+    const sentMessageId = sent.data?.id || "";
+    const now = new Date();
+
+    if (draftTurn) {
+      draftTurn.outgoing.status = "sent";
+      draftTurn.outgoing.sentAt = now;
+      draftTurn.outgoing.gmailMessageId = sentMessageId;
+      draftTurn.outcome = "sent";
+    }
+
+    action.type = "reply";
+    action.status = "sent";
+    action.sentAt = now;
+    action.gmailMessageId = sentMessageId;
+    action.checked = true;
+    action.checkedAt = now;
+
+    await action.save();
+
+    // Update ProcessedEmail whenever a draft is sent (sentAt, resolution "ai_draft_sent")
+    const targetMessageId = draftTurn?.incomingMessageId || action.sourceMessageId;
+    if (targetMessageId) {
+      await ProcessedEmail.findOneAndUpdate(
+        { userId: String(req.user.id), messageId: targetMessageId },
+        {
+          $set: {
+            sentAt: now,
+            resolution: "ai_draft_sent",
+            resolvedAt: now,
+          },
         },
-      },
-      { new: true },
-    );
+      ).catch((err) => console.warn("[emailAction] Failed to update ProcessedEmail:", err.message));
+    }
 
     return res.json({
       message: "Email sent successfully",
-      action: updated,
+      action,
     });
   } catch (error) {
     console.error("Send draft error:", error.message);
@@ -417,19 +467,31 @@ router.patch("/:id", auth, async (req, res) => {
       });
     }
 
-    if (action.type !== "draft") {
+    // Determine the latest turn containing a draft
+    let draftTurn = null;
+    if (Array.isArray(action.turns) && action.turns.length > 0) {
+      const lastTurn = action.turns[action.turns.length - 1];
+      if (lastTurn && lastTurn.outgoing && lastTurn.outgoing.kind === "draft") {
+        draftTurn = lastTurn;
+      }
+    }
+
+    const isDraft = action.type === "draft" || (draftTurn && draftTurn.outgoing?.kind === "draft");
+    if (!isDraft) {
       return res.status(400).json({
         message: "Only drafts can be edited",
       });
     }
 
-    if (action.status !== "draft") {
+    const currentStatus = draftTurn ? draftTurn.outgoing.status : action.status;
+    if (currentStatus !== "draft") {
       return res.status(409).json({
         message: "Only unsent drafts can be edited",
       });
     }
 
-    if (!action.gmailDraftId) {
+    const draftId = draftTurn?.outgoing?.gmailDraftId || action.gmailDraftId;
+    if (!draftId) {
       return res.status(400).json({
         message: "Gmail draft ID is missing",
       });
@@ -447,14 +509,24 @@ router.patch("/:id", auth, async (req, res) => {
 
     // Update the real Gmail draft first.
     const updatedDraft = await updateGmailDraft(gmail, {
-      gmailDraftId: action.gmailDraftId,
+      gmailDraftId: draftId,
       to: to.trim(),
       subject: subject.trim(),
       body,
       threadId: action.threadId,
     });
 
-    // Synchronize MongoDB with the edited content.
+    // Synchronize latest turn if present
+    if (draftTurn) {
+      draftTurn.outgoing.body = body;
+      draftTurn.from = to.trim();
+      draftTurn.incomingSubject = subject.trim();
+      if (updatedDraft.message?.id) {
+        draftTurn.outgoing.gmailMessageId = updatedDraft.message.id;
+      }
+    }
+
+    // Synchronize MongoDB top-level record with the edited content.
     action.to = to.trim();
     action.subject = subject.trim();
     action.body = body;
@@ -493,19 +565,31 @@ router.delete("/:id", auth, async (req, res) => {
       });
     }
 
-    if (action.type !== "draft") {
+    // Determine the latest turn containing a draft
+    let draftTurn = null;
+    if (Array.isArray(action.turns) && action.turns.length > 0) {
+      const lastTurn = action.turns[action.turns.length - 1];
+      if (lastTurn && lastTurn.outgoing && lastTurn.outgoing.kind === "draft") {
+        draftTurn = lastTurn;
+      }
+    }
+
+    const isDraft = action.type === "draft" || (draftTurn && draftTurn.outgoing?.kind === "draft");
+    if (!isDraft) {
       return res.status(400).json({
         message: "Only drafts can be deleted here",
       });
     }
 
-    if (action.status !== "draft") {
+    const currentStatus = draftTurn ? draftTurn.outgoing.status : action.status;
+    if (currentStatus !== "draft") {
       return res.status(409).json({
         message: "Only unsent drafts can be deleted",
       });
     }
 
-    if (!action.gmailDraftId) {
+    const draftId = draftTurn?.outgoing?.gmailDraftId || action.gmailDraftId;
+    if (!draftId) {
       return res.status(400).json({
         message: "Gmail draft ID is missing",
       });
@@ -522,14 +606,25 @@ router.delete("/:id", auth, async (req, res) => {
     const gmail = await getGmail(user);
 
     // Delete from Gmail before removing the database record.
-    await deleteGmailDraft(gmail, action.gmailDraftId);
+    await deleteGmailDraft(gmail, draftId);
 
-    await EmailAction.deleteOne({
-      _id: action._id,
-      userId: req.user.id,
-      type: "draft",
-      status: "draft",
-    });
+    // If there are multiple turns in the thread, mark this draft as deleted
+    // rather than deleting the whole thread history
+    if (Array.isArray(action.turns) && action.turns.length > 1) {
+      if (draftTurn) {
+        draftTurn.outgoing.status = "deleted";
+      }
+      const prevTurn = action.turns[action.turns.length - 2];
+      action.status = prevTurn?.outgoing?.status === "sent" ? "sent" : "reviewed";
+      action.type = prevTurn?.outgoing?.kind || "reply";
+      action.gmailDraftId = null;
+      await action.save();
+    } else {
+      await EmailAction.deleteOne({
+        _id: action._id,
+        userId: req.user.id,
+      });
+    }
 
     return res.json({
       message: "Draft deleted successfully",

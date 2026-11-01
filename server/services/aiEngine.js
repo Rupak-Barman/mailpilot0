@@ -82,7 +82,7 @@ const parseJson = (text) => {
 /**
  * Generate a response using local Qwen through Ollama.
  */
-async function generateLocalResponse(prompt) {
+async function generateLocalResponse(prompt, extraOptions = {}) {
   const response = await fetch(
     `${OLLAMA_BASE_URL}/api/chat`,
     {
@@ -104,6 +104,8 @@ async function generateLocalResponse(prompt) {
         keep_alive: "10m",
         options: {
           temperature: 0.2,
+          num_ctx: Number(process.env.OLLAMA_NUM_CTX) || 4096,
+          ...extraOptions,
         },
       }),
       signal: AbortSignal.timeout(180000),
@@ -127,7 +129,15 @@ async function generateLocalResponse(prompt) {
  * Analyze incoming email using local AI and local RAG.
  */
 export const analyzeEmailAI = async ({
-  userId, subject, from, snippet, bodyText, userProfileDescription, labels, personas = []
+  userId,
+  subject,
+  from,
+  snippet,
+  bodyText,
+  userProfileDescription,
+  labels,
+  personas = [],
+  previousTurns = []
 }) => {
   const usableLabels = labels || [];
   if (!usableLabels.length) return { label: "", action: "none", body: "" };
@@ -162,13 +172,29 @@ ${bodyText || snippet || ""}`);
     const tone = persona?.tone || selectedLabel.tone || "friendly";
     const signature = persona?.signature ? `\nSignature to use if appropriate: ${persona.signature}` : "";
     const personaInstructions = persona?.instructions || "Follow the selected rule's tone and write naturally.";
+
+    // Format previous turns context (last 3 turns)
+    let turnsContext = "";
+    if (Array.isArray(previousTurns) && previousTurns.length > 0) {
+      const last3 = previousTurns.slice(-3);
+      turnsContext = last3
+        .map((turn, i) => {
+          const inc = `[Turn ${i + 1} - From ${turn.from || "Sender"}]: ${turn.incomingSummary || turn.incomingSubject || ""}`;
+          const out = turn.outgoing?.body
+            ? `[Turn ${i + 1} - Outgoing (${turn.outgoing.kind || "reply"})]: ${turn.outgoing.body}`
+            : "";
+          return [inc, out].filter(Boolean).join("\n");
+        })
+        .join("\n\n");
+    }
+
     const prompt = `You are a professional email assistant. Generate a well-structured ${configuredAction === "reply" ? "reply" : "draft"} to the incoming email.
 
 WRITING PERSONA: ${persona?.name || "Default"}
 PERSONA INSTRUCTIONS: ${personaInstructions}
 TONE: ${tone}${signature}
 USER PROFILE: ${userProfileDescription || "No profile description provided."}
-
+${turnsContext ? `\nCONVERSATION THREAD CONTEXT (last 3 turns):\n${turnsContext}\n` : ""}
 FORMATTING REQUIREMENTS:
 1. Include a natural greeting (e.g. "Hi [Name]," or "Hello,").
 2. Structure the body in 1-3 concise paragraphs separated by empty lines.
