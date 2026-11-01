@@ -284,6 +284,35 @@ The migration must:
 
 ---
 
+## Batch 2.5 – Grouping Follow-ups
+
+### Issues fixed
+- A follow-up email with a DIFFERENT subject from the same sender gets a new Gmail threadId and creates a separate EmailAction instead of a new turn under the previous reply.
+
+### Changes
+| File | Change |
+|---|---|
+| `server/models/EmailAction.js` | Add `gmailThreadId`, `rfcMessageId`, `inReplyToHeader`, `referencesHeader`, `linkedBy` to `TurnSchema`; add `rfcMessageId` to `OutgoingTurnSchema`; index `turns.gmailThreadId` and `turns.rfcMessageId` |
+| `server/models/User.js` | Add `settings.groupBySender` (Boolean, default false) |
+| `server/routes/profile.routes.js` | Return `settings` in `GET /settings`; add `PATCH /settings` endpoint to save user settings |
+| `server/.env.example` | Add `GROUP_WINDOW_DAYS=14` |
+| `server/jobs/poll.job.js` | Follow lookup order: (a) threadId/turn.gmailThreadId, (b) In-Reply-To/References, (c) groupBySender within GROUP_WINDOW_DAYS; fetch sent message RFC Message-ID; use turn's `gmailThreadId` for draft creation & message sending |
+| `server/routes/emailAction.routes.js` | Fetch sent message metadata after `drafts.send` and store `outgoing.rfcMessageId` |
+| `frontend/src/features/emailActions/EmailActionDetail.jsx` | Show "Linked by sender" / "Linked by reply headers" tags; collapsed note for different subject; Open in Gmail uses turn's `gmailThreadId` |
+| `frontend/src/features/profile/AccountPanel.jsx` | Add "Group follow-ups by sender" toggle switch |
+| `frontend/src/api/profile.api.js` & `useProfileSettings.js` | Add `updateProfileSettings` and `useUpdateProfileSettings` |
+| `server/tests/followup-grouping.test.js` | Mocked tests for all grouping scenarios |
+
+### Test plan
+- [x] Same thread: appends turn with `linkedBy: "thread"`
+- [x] Different subject with matching In-Reply-To: appends turn with `linkedBy: "headers"`
+- [x] Different subject, same sender, setting on: appends turn with `linkedBy: "sender"`
+- [x] Same setting off: creates separate record
+- [x] Sender outside the window: creates separate record
+- [x] A reply to a linked turn goes out in that turn's `gmailThreadId`
+
+---
+
 ## Batch 3 – AI Engine & RAG Improvements
 
 ### Issues fixed
@@ -823,6 +852,14 @@ These tests must pass before marking the fix plan complete.
 - [x] 2.4 Write `server/tools/migrate-email-actions.js`
 - [x] 2.5 Write `server/tools/backfill-summaries.js`
 - [x] 2.6 Update `EmailActionDetail.jsx` (timeline, no duplicate badge, real sender)
+
+### Batch 2.5 – Grouping Follow-ups
+- [x] 2.5.1 Schema updates (gmailThreadId, rfcMessageId, inReplyToHeader, referencesHeader, linkedBy, indexes)
+- [x] 2.5.2 Poll lookup order ((a) threadId/turn.gmailThreadId, (b) In-Reply-To/References, (c) groupBySender within GROUP_WINDOW_DAYS)
+- [x] 2.5.3 Fetch sent RFC Message-ID and use turn's gmailThreadId for draft/send
+- [x] 2.5.4 User.settings.groupBySender setting & profile settings route & .env.example
+- [x] 2.5.5 UI timeline linked tags, subject difference note, Open in Gmail with turn's threadId
+- [x] 2.5.6 Mocked tests for all grouping scenarios
 
 ### Batch 3 – AI Engine
 - [ ] 3.1 Switch model to `qwen2.5:7b`; record comparison

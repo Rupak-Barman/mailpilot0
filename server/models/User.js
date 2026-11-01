@@ -66,6 +66,13 @@ const UserSchema = new mongoose.Schema({
     default: null
   },
 
+  settings: {
+    groupBySender: {
+      type: Boolean,
+      default: false
+    }
+  },
+
   personas: {
     type: [WritingPersonaSchema],
     default: []

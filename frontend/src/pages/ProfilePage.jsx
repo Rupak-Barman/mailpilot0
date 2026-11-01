@@ -74,7 +74,7 @@ export const ProfilePage = () => {
       <div className="mt-6">
         {activeTab === "identity" && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <AccountPanel profile={data?.profile} />
+            <AccountPanel profile={data?.profile} settings={data?.settings} />
 
             <WritingPersonaManager />
           </div>

@@ -281,7 +281,8 @@ const EmailActionDetailContent = ({
     firstTurn?.incomingSummary ||
     item.summary ||
     "";
-  const effectiveThreadId = item.threadId || item.sourceMessageId;
+  const firstTurnThreadId = firstTurn?.gmailThreadId || item.threadId || item.sourceMessageId;
+  const firstTurnSubject = (firstTurn?.incomingSubject || item.subject || "").trim().toLowerCase();
 
   return (
     <>
@@ -447,6 +448,23 @@ const EmailActionDetailContent = ({
                 const isExpanded = expandedTurnIndices.has(index);
                 const turnOutgoing = turn.outgoing;
                 const turnStatus = turnOutgoing?.status || (isLatest ? item.status : "draft");
+                const turnThreadId = turn.gmailThreadId || firstTurnThreadId;
+                const currentSubject = (turn.incomingSubject || "").trim();
+                const hasSubjectDiff = Boolean(
+                  currentSubject &&
+                    firstTurnSubject &&
+                    currentSubject.toLowerCase() !== firstTurnSubject
+                );
+                const linkedTag =
+                  turn.linkedBy === "sender" ? (
+                    <span className="inline-flex items-center rounded border border-purple-200 bg-purple-50 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:border-purple-800 dark:bg-purple-950/50 dark:text-purple-300">
+                      Linked by sender
+                    </span>
+                  ) : turn.linkedBy === "headers" ? (
+                    <span className="inline-flex items-center rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300">
+                      Linked by reply headers
+                    </span>
+                  ) : null;
 
                 if (!isExpanded) {
                   return (
@@ -459,13 +477,14 @@ const EmailActionDetailContent = ({
                         onClick={() => toggleTurn(index)}
                         className="flex w-full items-center justify-between gap-3 text-left"
                       >
-                        <div className="flex min-w-0 items-center gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
                           <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-slate-300">
                             {index + 1}
                           </span>
                           <span className="truncate text-xs font-medium text-slate-900 dark:text-slate-100">
                             {turn.from || item.to || "Unknown sender"}
                           </span>
+                          {linkedTag}
                           {turnOutgoing && (
                             <Badge tone={getStatusTone(turnStatus)}>
                               {titleCase(turnStatus)}
@@ -496,7 +515,7 @@ const EmailActionDetailContent = ({
                   >
                     {/* Turn Header */}
                     <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-zinc-800">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span
                           className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
                             isLatest
@@ -509,9 +528,22 @@ const EmailActionDetailContent = ({
                         <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                           {isLatest ? "Latest Turn" : `Turn ${index + 1}`}
                         </span>
+                        {linkedTag}
                       </div>
 
                       <div className="flex items-center gap-2">
+                        {turnThreadId && (
+                          <a
+                            href={`https://mail.google.com/mail/u/0/#inbox/${turnThreadId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-500 hover:underline dark:text-blue-400"
+                            title="Open in Gmail"
+                          >
+                            Open in Gmail
+                            <FiExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
                         <span className="text-xs text-slate-400">
                           {formatDateTime(turn.receivedAt || item.createdAt)}
                         </span>
@@ -541,6 +573,22 @@ const EmailActionDetailContent = ({
                         </div>
                         {turn.label && <Badge tone="blue">{turn.label}</Badge>}
                       </div>
+
+                      {/* Collapsed note when subject differs from first turn */}
+                      {hasSubjectDiff && (
+                        <details className="rounded border border-slate-200 bg-slate-100/60 p-2 text-xs text-slate-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-slate-400">
+                          <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-slate-200">
+                            Subject differs:{" "}
+                            <span className="font-semibold text-slate-800 dark:text-slate-200">
+                              {turn.incomingSubject}
+                            </span>
+                          </summary>
+                          <p className="mt-1 pl-2 text-[11px] text-slate-500 dark:text-slate-400">
+                            Original thread subject:{" "}
+                            {firstTurn?.incomingSubject || item.subject}
+                          </p>
+                        </details>
+                      )}
 
                       {/* Summary */}
                       <div className="rounded-md border border-slate-200/80 bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-slate-300">
@@ -713,9 +761,9 @@ const EmailActionDetailContent = ({
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
                 Original Thread Context
               </p>
-              {effectiveThreadId && (
+              {firstTurnThreadId && (
                 <a
-                  href={`https://mail.google.com/mail/u/0/#inbox/${effectiveThreadId}`}
+                  href={`https://mail.google.com/mail/u/0/#inbox/${firstTurnThreadId}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-500 hover:underline dark:text-blue-400"

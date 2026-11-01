@@ -35,7 +35,7 @@ router.get("/", auth, async (req, res) => {
 router.get("/settings", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
-      .select("name email labels personas");
+      .select("name email labels personas settings");
 
     if (!user) {
       return res.status(404).json({
@@ -69,12 +69,16 @@ router.get("/settings", auth, async (req, res) => {
       })
     ]);
 
+    const settings = user.settings || { groupBySender: false };
+
     return res.json({
       profile: {
         name: user.name,
-        email: user.email
+        email: user.email,
+        settings
       },
 
+      settings,
       labels: user.labels || [],
       personas: user.personas || [],
 
@@ -90,6 +94,43 @@ router.get("/settings", auth, async (req, res) => {
 
     return res.status(500).json({
       message: "Could not fetch profile settings."
+    });
+  }
+});
+
+// Update profile settings (e.g. groupBySender)
+router.patch("/settings", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found."
+      });
+    }
+
+    if (req.body.settings && typeof req.body.settings === "object") {
+      if (!user.settings) user.settings = {};
+      if (typeof req.body.settings.groupBySender === "boolean") {
+        user.settings.groupBySender = req.body.settings.groupBySender;
+      }
+      await user.save();
+    }
+
+    const settings = user.settings || { groupBySender: false };
+
+    return res.json({
+      settings,
+      profile: {
+        name: user.name,
+        email: user.email,
+        settings
+      }
+    });
+  } catch (error) {
+    console.error("Update profile settings error:", error);
+
+    return res.status(500).json({
+      message: "Could not update profile settings."
     });
   }
 });

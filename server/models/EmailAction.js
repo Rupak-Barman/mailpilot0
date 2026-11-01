@@ -39,6 +39,7 @@ const OutgoingTurnSchema = new mongoose.Schema(
     },
     gmailDraftId: String,
     gmailMessageId: String,
+    rfcMessageId: String, // RFC Message-ID of the sent message
     sentAt: Date,
     composedManually: {
       type: Boolean,
@@ -54,6 +55,15 @@ const TurnSchema = new mongoose.Schema(
   {
     // Incoming side
     incomingMessageId: String,
+    gmailThreadId: String,
+    rfcMessageId: String, // incoming Message-ID header
+    inReplyToHeader: String,
+    referencesHeader: String,
+    linkedBy: {
+      type: String,
+      enum: ["thread", "headers", "sender"],
+      default: "thread"
+    },
     from: String, // real sender display name + address
     receivedAt: Date,
     incomingSubject: String,
@@ -139,6 +149,9 @@ const EmailActionSchema = new mongoose.Schema(
     autoIndex: false
   }
 );
+
+EmailActionSchema.index({ "turns.gmailThreadId": 1 });
+EmailActionSchema.index({ "turns.rfcMessageId": 1 });
 
 if (mongoose.models.EmailAction) {
   delete mongoose.models.EmailAction;

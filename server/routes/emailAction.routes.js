@@ -8,6 +8,7 @@ import {
   updateGmailDraft,
   deleteGmailDraft,
 } from "../services/gmail.service.js";
+import { getHeader } from "../utils/helpers.js";
 
 const router = express.Router();
 
@@ -367,10 +368,32 @@ router.post("/:id/send", auth, async (req, res) => {
     const sentMessageId = sent.data?.id || "";
     const now = new Date();
 
+    let sentRfcMessageId = null;
+    if (sentMessageId) {
+      try {
+        const meta = await gmail.users.messages.get({
+          userId: "me",
+          id: sentMessageId,
+          format: "metadata",
+          metadataHeaders: ["Message-ID", "Message-Id"]
+        });
+        sentRfcMessageId =
+          getHeader(meta?.data, "Message-ID") ||
+          getHeader(meta?.data, "Message-Id") ||
+          null;
+      } catch (metaErr) {
+        console.warn(
+          "[emailAction.routes] Could not fetch sent RFC Message-ID:",
+          metaErr.message
+        );
+      }
+    }
+
     if (draftTurn) {
       draftTurn.outgoing.status = "sent";
       draftTurn.outgoing.sentAt = now;
       draftTurn.outgoing.gmailMessageId = sentMessageId;
+      draftTurn.outgoing.rfcMessageId = sentRfcMessageId;
       draftTurn.outcome = "sent";
     }
 

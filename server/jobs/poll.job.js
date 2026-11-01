@@ -127,6 +127,105 @@ export const shouldSkipLoopProtection = (email, userOrEmail, options = {}) => {
   return { skip: false };
 };
 
+export const normalizeEmailAddress = (str) => {
+  if (!str) return "";
+  const match = String(str).match(/<([^>]+)>/);
+  return (match ? match[1] : str).trim().toLowerCase();
+};
+
+export const extractHeaderMessageIds = (headerValue) => {
+  if (!headerValue) return [];
+  const matches = String(headerValue).match(/<[^>]+>/g);
+  if (matches && matches.length > 0) {
+    return matches.map((m) => m.trim());
+  }
+  const trimmed = String(headerValue).trim();
+  return trimmed ? [trimmed] : [];
+};
+
+/**
+ * Batch 2.5: Lookup order for grouping follow-ups for each incoming message:
+ * (a) a record whose threadId or any turn.gmailThreadId equals the message's threadId;
+ * (b) a record where any id in the message's In-Reply-To/References equals a stored turn rfcMessageId or one of our sent Message-IDs;
+ * (c) only if the user setting groupBySender is true: a record with the same normalized sender email,
+ *     whose last activity is within GROUP_WINDOW_DAYS (default 14), and whose latest turn is not skipped.
+ */
+export const findMatchingEmailAction = async (user, email, options = {}) => {
+  const actionModel = options.actionModel || EmailAction;
+  const userIdStr = String(user._id || user.id);
+  const msgThreadId = email.threadId;
+
+  // (a) a record whose threadId or any turn.gmailThreadId equals the message's threadId
+  if (msgThreadId) {
+    const byThread = await actionModel.findOne({
+      userId: userIdStr,
+      $or: [
+        { threadId: msgThreadId },
+        { "turns.gmailThreadId": msgThreadId }
+      ]
+    });
+    if (byThread) {
+      return { record: byThread, linkedBy: "thread" };
+    }
+  }
+
+  // (b) a record where any id in the message's In-Reply-To/References equals a stored turn rfcMessageId or one of our sent Message-IDs
+  const inReplyTo = getHeader(email, "In-Reply-To");
+  const references = getHeader(email, "References");
+  const headerIds = [
+    ...extractHeaderMessageIds(inReplyTo),
+    ...extractHeaderMessageIds(references)
+  ];
+
+  if (headerIds.length > 0) {
+    const byHeaders = await actionModel.findOne({
+      userId: userIdStr,
+      $or: [
+        { "turns.rfcMessageId": { $in: headerIds } },
+        { "turns.outgoing.rfcMessageId": { $in: headerIds } }
+      ]
+    });
+    if (byHeaders) {
+      return { record: byHeaders, linkedBy: "headers" };
+    }
+  }
+
+  // (c) only if the user setting groupBySender is true: a record with the same normalized sender email,
+  // whose last activity is within GROUP_WINDOW_DAYS (default 14), and whose latest turn is not skipped.
+  if (user?.settings?.groupBySender) {
+    const groupWindowDays = Number(process.env.GROUP_WINDOW_DAYS) || 14;
+    const windowStart = new Date(Date.now() - groupWindowDays * 24 * 60 * 60 * 1000);
+    const normalizedSender = normalizeEmailAddress(getHeader(email, "From"));
+
+    if (normalizedSender) {
+      const candidates = await actionModel.find({
+        userId: userIdStr,
+        updatedAt: { $gte: windowStart }
+      }).sort({ updatedAt: -1 });
+
+      for (const candidate of candidates) {
+        const turns = candidate.turns || [];
+        const latestTurn = turns.length > 0 ? turns[turns.length - 1] : null;
+
+        // Skip if latest turn is marked skipped
+        if (latestTurn && (latestTurn.outcome === "skipped" || latestTurn.outgoing?.status === "skipped")) {
+          continue;
+        }
+
+        const candidateSender = normalizeEmailAddress(
+          latestTurn?.from || candidate.to || (turns[0]?.from) || ""
+        );
+
+        if (candidateSender && candidateSender === normalizedSender) {
+          return { record: candidate, linkedBy: "sender" };
+        }
+      }
+    }
+  }
+
+  return { record: null, linkedBy: "thread" };
+};
+
 /**
  * Stale-processing recovery (B8):
  * Rows with status:'processing' older than 5 minutes.
@@ -352,13 +451,13 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     const olderEntries = validEmailEntries.slice(0, validEmailEntries.length - 1);
     const effectiveThreadId = newestEntry.email.threadId || threadId;
 
-    // Check for existing thread action to pass conversation history context
-    const existingThreadAction = effectiveThreadId
-      ? await EmailAction.findOne({
-          userId: userIdStr,
-          threadId: effectiveThreadId
-        })
-      : null;
+    // Batch 2.5: Lookup order for grouping follow-ups:
+    // (a) threadId or turn.gmailThreadId equals message threadId
+    // (b) In-Reply-To/References equals turn rfcMessageId or outgoing.rfcMessageId
+    // (c) if groupBySender: same normalized sender within GROUP_WINDOW_DAYS (default 14) and latest turn not skipped
+    const matchResult = await findMatchingEmailAction(user, newestEntry.email);
+    const existingThreadAction = matchResult.record;
+    const matchLinkedBy = matchResult.linkedBy || "thread";
     const previousTurns = existingThreadAction?.turns || [];
 
     // Summarise each message using AI
@@ -408,6 +507,11 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
           try {
             const failedTurn = {
               incomingMessageId: newestEntry.item.id,
+              gmailThreadId: newestEntry.email.threadId || effectiveThreadId,
+              rfcMessageId: getHeader(newestEntry.email, "Message-ID") || getHeader(newestEntry.email, "Message-Id") || null,
+              inReplyToHeader: getHeader(newestEntry.email, "In-Reply-To") || null,
+              referencesHeader: getHeader(newestEntry.email, "References") || null,
+              linkedBy: matchLinkedBy,
               from: getHeader(newestEntry.email, "From"),
               receivedAt: new Date(Number(newestEntry.email.internalDate || Date.now())),
               incomingSubject: getHeader(newestEntry.email, "Subject"),
@@ -528,6 +632,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     let gmailDraftId = "";
 
     const newestEmail = newestEntry.email;
+    const turnGmailThreadId = newestEmail.threadId || effectiveThreadId;
     const newestSubject = getHeader(newestEmail, "Subject");
     const newestFrom = getHeader(newestEmail, "From");
     const newestMessageHeaderId = getHeader(newestEmail, "Message-ID");
@@ -575,13 +680,41 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
               userId: "me",
               requestBody: {
                 raw,
-                threadId: effectiveThreadId
+                threadId: turnGmailThreadId
               }
             });
           },
           user
         );
         gmailMessageId = sent.data.id;
+
+        // Fetch sent message metadata to extract its RFC Message-ID
+        let sentRfcMessageId = null;
+        if (gmailMessageId) {
+          try {
+            const meta = await withGmail(
+              gmail || user,
+              async (g) => {
+                return await g.users.messages.get({
+                  userId: "me",
+                  id: gmailMessageId,
+                  format: "metadata",
+                  metadataHeaders: ["Message-ID", "Message-Id"]
+                });
+              },
+              user
+            );
+            sentRfcMessageId =
+              getHeader(meta?.data, "Message-ID") ||
+              getHeader(meta?.data, "Message-Id") ||
+              null;
+          } catch (metaErr) {
+            console.warn(
+              "[poll] Could not fetch sent message RFC Message-ID:",
+              metaErr.message
+            );
+          }
+        }
 
         // Persist sent state immediately so later failures never cause a duplicate send
         newestEntry.claimDoc.outcome = "sent";
@@ -597,7 +730,9 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
           user.dailyReplySentDate = new Date();
           user.dailyReplySentCount = 1;
         }
-        await user.save().catch(() => {});
+        if (typeof user.save === "function") {
+          await user.save().catch(() => {});
+        }
 
         outgoing = {
           kind: "reply",
@@ -606,6 +741,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
           status: "sent",
           gmailDraftId: null,
           gmailMessageId,
+          rfcMessageId: sentRfcMessageId,
           sentAt: new Date(),
           composedManually: false,
           inReplyTo: newestMessageHeaderId,
@@ -622,7 +758,7 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
               requestBody: {
                 message: {
                   raw,
-                  threadId: effectiveThreadId
+                  threadId: turnGmailThreadId
                 }
               }
             });
@@ -650,6 +786,14 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     // Build turns for older messages in this tick
     const olderTurns = olderEntries.map((entry) => ({
       incomingMessageId: entry.item.id,
+      gmailThreadId: entry.email.threadId || effectiveThreadId,
+      rfcMessageId:
+        getHeader(entry.email, "Message-ID") ||
+        getHeader(entry.email, "Message-Id") ||
+        null,
+      inReplyToHeader: getHeader(entry.email, "In-Reply-To") || null,
+      referencesHeader: getHeader(entry.email, "References") || null,
+      linkedBy: matchLinkedBy,
       from: getHeader(entry.email, "From"),
       receivedAt: new Date(Number(entry.email.internalDate || Date.now())),
       incomingSubject: getHeader(entry.email, "Subject"),
@@ -664,6 +808,11 @@ export const processThreadGroup = async ({ user, gmail = null, threadId = null, 
     const newestOutcome = finalAction === "reply" ? "sent" : (finalAction === "draft" ? "drafted" : "none");
     const newestTurn = {
       incomingMessageId: newestEntry.item.id,
+      gmailThreadId: turnGmailThreadId,
+      rfcMessageId: newestMessageHeaderId || null,
+      inReplyToHeader: getHeader(newestEmail, "In-Reply-To") || null,
+      referencesHeader: newestReferences || null,
+      linkedBy: matchLinkedBy,
       from: newestFrom,
       receivedAt: new Date(Number(newestEmail.internalDate || Date.now())),
       incomingSubject: newestSubject,
