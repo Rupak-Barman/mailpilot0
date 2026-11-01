@@ -353,3 +353,30 @@ export const buildMimeMessage = ({
 
   return Buffer.from(mimeMessage, "utf8").toString("base64url");
 };
+
+/**
+ * Safely escapes string characters for use in RegExp constructor or MongoDB $regex.
+ * Prevents regex injection and ReDoS vulnerabilities.
+ */
+export function escapeRegex(text) {
+  if (typeof text !== "string") return "";
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Recursively strip MongoDB query operator keys (keys starting with $) from user input objects.
+ */
+export function stripMongoOperators(obj) {
+  if (!obj || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(stripMongoOperators);
+  }
+  const clean = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (!key.startsWith("$")) {
+      clean[key] = stripMongoOperators(val);
+    }
+  }
+  return clean;
+}
+

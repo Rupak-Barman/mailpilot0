@@ -4,10 +4,12 @@
 .env
 .env.*
 *.env
+.env.local
 server/.env
 server/.env.*
 frontend/.env
 frontend/.env.*
+frontend/.env.local
 !.env.example
 !server/.env.example
 !frontend/.env.example
@@ -37,8 +39,12 @@ build/
 # Local Database, LanceDB Vector Store & File Uploads
 # ==============================================================================
 data/
+data/lancedb/
 server/data/
 server/data/lancedb/
+backup/
+backups/
+*.bak
 *.sqlite
 *.sqlite3
 *.db

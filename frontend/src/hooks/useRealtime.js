@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
-import { API_URL } from "../utils/constants";
+import { API_URL } from "../config.js";
 import { useAuth } from "./useAuth";
 import { DebouncedInvalidator } from "../utils/realtimeInvalidator";
 
@@ -44,7 +44,7 @@ export const useRealtime = () => {
     const ctrl = new AbortController();
     abortControllerRef.current = ctrl;
 
-    const baseUrl = import.meta.env.VITE_API_URL || API_URL || "http://localhost:3000";
+    const baseUrl = API_URL;
     const url = `${baseUrl}/events`;
 
     const connect = async () => {
@@ -97,6 +97,13 @@ export const useRealtime = () => {
           },
           onerror(err) {
             if (ctrl.signal.aborted) return;
+            // Fatal auth errors (401/403) must stop reconnecting cleanly
+            if (err?.message?.includes("Fatal auth error") || err?.message?.includes("401")) {
+              if (isMounted) {
+                setStatus("disconnected");
+              }
+              return;
+            }
             if (isMounted) {
               setStatus("reconnecting");
             }

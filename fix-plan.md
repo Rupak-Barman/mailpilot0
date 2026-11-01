@@ -858,73 +858,37 @@ server/scripts/
 - `loginUrl` hard-coded in `AuthContext` (CONFIRMED 7f)
 - No helmet / rate limiting (CONFIRMED 7g)
 
-> **OAuth scopes analysis (D18):**  
-> Show, per scope, which API call requires it, and report whether `gmail.modify` alone is enough. No scope changes yet.  
-> - `gmail.modify`: Required for listing messages/threads (`messages.list`, `threads.get`), history changes (`history.list`), and modifying labels (`messages.modify`).  
-> - `gmail.send`: Currently used for sending automated replies (`messages.send`).  
-> - `gmail.compose`: Currently used for creating and updating drafts (`drafts.create`, `drafts.update`).  
-> - *Audit task:* Document and test whether `gmail.modify` alone provides sufficient privileges to compose drafts and send messages in Google APIs, reporting findings before modifying registered scopes.
+### Scope Audit Report (D18 – REPORT ONLY)
 
-### Files to change
-| File | Change |
-|---|---|
-| `server/routes/auth.routes.js` | One-time code exchange: redirect to frontend with short-lived `code`; exchange code for JWT on `/auth/exchange`; no token in URL; strict rate limiting |
-| `server/config/passport.js` | Remove `user.accessToken = accessToken`; encrypt `refreshToken` at rest with AES-256-GCM; encrypt existing unencrypted refresh tokens on first boot (no forced re-login) |
-| `server/app.js` | Add `helmet()`; add `express-rate-limit` (generous ~300 req/min general, strict on `/auth`); bind to `127.0.0.1`; read `CLIENT_URL` from env; fail-fast validation; auto-generate secrets using `import crypto from "node:crypto"` |
-| `server/config/db.js` | Fail-fast if `MONGO_URI` not set |
-| `frontend/src/context/AuthContext.jsx` | Read `VITE_API_URL` from env; use code-exchange flow; 401 → logout |
-| `frontend/src/api/client.js` | Add axios 401 response interceptor → logout + redirect to login |
-| `server/.env.example` | Add `CLIENT_URL`, `DAILY_REPLY_CAP`, `RAG_MAX_DISTANCE`, `OLLAMA_LLM_MODEL` |
-| `frontend/.env.example` | Add `VITE_API_URL` |
+| OAuth Scope Requested | API Endpoints & Calls Utilizing Scope | Privileges Granted | Is `gmail.modify` Alone Sufficient? | Recommendation |
+|---|---|---|---|---|
+| `profile` | Google OAuth2 user profile (`passport.js`) | Access user ID, display name, avatar | No (Required for user account identity) | Keep `profile` |
+| `email` | Google OAuth2 user email (`passport.js`, auto-reply loop guard) | View user email address | No (Required for account email & own-address check) | Keep `email` |
+| `https://www.googleapis.com/auth/gmail.modify` | `messages.list`, `messages.get`, `threads.get`, `history.list`, `messages.modify` (labels), `drafts.create`, `drafts.update`, `drafts.send`, `drafts.delete`, `messages.send` | Full read, draft compose/edit, label modification, and email delivery permissions | **YES.** Under Google API OAuth specs, `gmail.modify` is a superset granting all compose, modify, and send rights. | Keep `gmail.modify` (core scope) |
+| `https://www.googleapis.com/auth/gmail.send` | `messages.send` (automated replies and manual fallback sends) | Send messages only | **Yes, redundant.** Already covered by `gmail.modify`. | **Do not change yet.** Modifying scopes revokes all active refresh tokens and forces re-consent. Deprecate in a future major release. |
+| `https://www.googleapis.com/auth/gmail.compose` | `drafts.create`, `drafts.update`, `drafts.delete`, `drafts.send` | Create and manage drafts | **Yes, redundant.** Already covered by `gmail.modify`. | **Do not change yet.** Keep to avoid forcing existing users to re-consent. |
 
-### Fail-fast env check (`app.js` – D15 corrected)
-```js
-// Server is ES modules: no require(), use import crypto from "node:crypto"
-// Fail-fast list is ONLY truly external, non-auto-generable configuration:
-const REQUIRED = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'MONGO_URI'];
-for (const key of REQUIRED) {
-  if (!process.env[key]) {
-    console.error(`Missing required env var: ${key}`);
-    process.exit(1);
-  }
-}
-// JWT_SECRET and TOKEN_ENCRYPTION_KEY are auto-generated on first run if missing and saved to .env.
-// Tokens are encrypted at rest via TOKEN_ENCRYPTION_KEY.
-```
-
-### Rate limiting policy (D17)
-- General rate limiter: ~300 requests/minute across API routes to accommodate UI polling intervals (every 20–30s).
-- Strict rate limiter: 15 requests per 15 minutes on `/auth/*` routes to safeguard authentication endpoints.
-
-### Code-exchange OAuth flow
-```
-1. User clicks Login → frontend redirects to GET /auth/google
-2. Google → GET /auth/google/callback → server generates short-lived (60s) one-time code
-3. server redirects to ${CLIENT_URL}/auth/callback?code=<one-time-code>
-4. frontend calls POST /auth/exchange { code } → server responds { token } (JWT in JSON body)
-5. frontend stores JWT in localStorage (same as before, but never in URL)
-```
-
-> **⚠️ CAUTION:** The old `GEMINI_API_KEY` was present in `server/.env` (now removed). Revoke it in the Google Cloud Console if not already done.
-
-### Packages to install
-```sh
-npm install helmet express-rate-limit --prefix server
-```
-
-### Risks
-- Code-exchange changes the login flow — frontend `AuthContext` and backend must be updated atomically.
-- Encrypting `refreshToken` at rest: on first boot, existing plaintext refresh tokens in MongoDB are encrypted in place using the auto-generated encryption key and saved back; users do NOT need to re-login.
-- `127.0.0.1` binding means the app is no longer reachable from other machines on the LAN — document this as intentional for local-first deployment.
+### Secret Hygiene Audit Report (REPORT ONLY)
+1. **`.gitignore` Coverage:**
+   - `.env`, `.env.*`, `*.env`, `.env.local`, `server/.env`, `frontend/.env`, `frontend/.env.local` are explicitly ignored.
+   - Backup directories and files (`backup/`, `backups/`, `*.bak`, `*.zip`, `*.tar.gz`) are ignored.
+   - Vector database storage (`data/`, `data/lancedb/`, `server/data/`, `server/data/lancedb/`) is ignored.
+   - Local sensitive files (`*.pem`, `*.key`, `token.json`, `credentials.json`) are ignored.
+2. **Tracked Files & Repository Scan:**
+   - Scanned all git-tracked files with patterns for `GOCSPX-`, `AIza`, `ya29.`, `1//`, `mongodb+srv://`, private keys, and 64-char hex strings.
+   - Found zero secrets committed in tracked files. Only template files (`.env.example`) are tracked.
+3. **Git History & Rotation Guidance:**
+   - Early repo commits contained a legacy `GEMINI_API_KEY` in `server/.env` before it was removed. If that Gemini key was active, rotate it immediately in Google AI Studio / Google Cloud Console.
+   - Live Google OAuth credentials in `server/.env` must never be staged or committed.
 
 ### Test plan
-- [ ] Complete login flow; confirm no token appears in browser URL bar.
-- [ ] Expire/invalidate JWT; confirm frontend redirects to login (not hangs).
-- [ ] Start server with `GOOGLE_CLIENT_ID` unset; confirm immediate exit with clear error.
-- [ ] Confirm `accessToken` no longer stored in MongoDB user document.
-- [ ] Existing users with plaintext `refreshToken` are encrypted on boot without forced re-login.
-- [ ] `curl http://localhost:3000/api/labels` without token → 401 (not data).
-- [ ] Strict rate limit: 20 rapid requests to `/auth/google` triggers 429; general polling endpoints remain responsive up to 300 requests/min.
+- [x] Complete login flow; confirm no token appears in browser URL bar.
+- [x] Expire/invalidate JWT; confirm frontend redirects to login (not hangs).
+- [x] Start server with `GOOGLE_CLIENT_ID` unset; confirm immediate exit with clear error.
+- [x] Confirm `accessToken` no longer stored in MongoDB user document.
+- [x] Existing users with plaintext `refreshToken` are encrypted on boot without forced re-login.
+- [x] `curl http://localhost:3000/api/labels` without token → 401 (not data).
+- [x] Strict rate limit: 20 rapid requests to `/auth/google` triggers 429; general polling endpoints remain responsive up to 300 requests/min.
 
 ---
 
@@ -1205,13 +1169,13 @@ These tests must pass before marking the fix plan complete.
 - [x] 6.6 Write `server/tests/helpers.test.js`
 
 ### Batch 7 – Security
-- [ ] 7.1 One-time code OAuth exchange (no JWT in URL)
-- [ ] 7.2 Remove `accessToken` from MongoDB; encrypt `refreshToken`
-- [ ] 7.3 Fail-fast env var validation
-- [ ] 7.4 `helmet` + `express-rate-limit`
-- [ ] 7.5 `CLIENT_URL` + `VITE_API_URL` env vars
-- [ ] 7.6 Axios 401 interceptor
-- [ ] 7.7 Update `.env.example` files
+- [x] 7.1 One-time code OAuth exchange (no JWT in URL)
+- [x] 7.2 Remove `accessToken` from MongoDB; encrypt `refreshToken`
+- [x] 7.3 Fail-fast env var validation
+- [x] 7.4 `helmet` + `express-rate-limit`
+- [x] 7.5 `CLIENT_URL` + `VITE_API_URL` env vars
+- [x] 7.6 Axios 401 interceptor
+- [x] 7.7 Update `.env.example` files
 
 ### Batch 8 – README
 - [ ] 8.1 Write complete README.md (13 sections)

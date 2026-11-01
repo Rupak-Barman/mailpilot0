@@ -131,7 +131,7 @@ describe("Gmail service - OAuth2 client & error handling", () => {
     assert.equal(saved, true);
   });
 
-  it("getOAuth2Client persists tokens only when changed", async () => {
+  it("getOAuth2Client persists tokens only when changed (persists refresh_token only)", async () => {
     let savedCount = 0;
     const fakeUser = {
       accessToken: "old_access",
@@ -149,11 +149,17 @@ describe("Gmail service - OAuth2 client & error handling", () => {
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(savedCount, 0, "Should not save if token did not change");
 
-    // Emit tokens with new access token -> save should be called
+    // Emit tokens with new access token -> sets in-memory accessToken, does NOT persist to MongoDB
     auth.emit("tokens", { access_token: "new_access" });
     await new Promise((r) => setTimeout(r, 20));
-    assert.equal(savedCount, 1, "Should save when access token changes");
+    assert.equal(savedCount, 0, "Should NOT save to DB when only access token changes");
     assert.equal(fakeUser.accessToken, "new_access");
+
+    // Emit tokens with new refresh token -> save SHOULD be called
+    auth.emit("tokens", { refresh_token: "new_refresh_token" });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(savedCount, 1, "Should save when new refresh token is issued");
+    assert.ok(fakeUser.refreshToken, "User refreshToken should be updated");
   });
 
   it("getGmail returns real googleapis client where gmail.users.messages.list and gmail.users.history.list are accessible functions", async () => {

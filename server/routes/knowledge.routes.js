@@ -1,5 +1,6 @@
 import express from "express";
 import multer from "multer";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { PDFParse } from "pdf-parse";
 
@@ -50,11 +51,17 @@ router.post(
         });
       }
 
-      if (req.file.mimetype !== "application/pdf") {
+      const fileExtension = path.extname(req.file.originalname || "").toLowerCase();
+      if (req.file.mimetype !== "application/pdf" || fileExtension !== ".pdf") {
         return res.status(400).json({
           message: "Only PDF files are allowed."
         });
       }
+
+      // Sanitize original filename: strip path traversal and non-safe characters
+      const baseName = path.basename(req.file.originalname || "document.pdf");
+      const safeFileName = baseName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 150);
+      req.file.originalname = safeFileName;
 
       const displayName = cleanDisplayName(req.body.displayName);
 

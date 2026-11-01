@@ -3,6 +3,7 @@ import "dotenv/config";
 import { google } from "googleapis";
 import { buildMimeMessage } from "../utils/helpers.js";
 import { publishUserEvent } from "./events.service.js";
+import { decryptUserRefreshToken, setUserRefreshToken } from "../utils/crypto.js";
 
 /**
  * Typed error for Google OAuth2 invalid_grant situations.
@@ -63,19 +64,25 @@ export const getOAuth2Client = (user) => {
     process.env.GOOGLE_CLIENT_SECRET
   );
 
+  const rawRefreshToken = typeof user.getDecryptedRefreshToken === "function"
+    ? user.getDecryptedRefreshToken()
+    : decryptUserRefreshToken(user);
+
   auth.setCredentials({
-    access_token: user.accessToken,
-    refresh_token: user.refreshToken
+    refresh_token: rawRefreshToken || user.refreshToken
   });
 
   auth.on("tokens", async (tokens) => {
     let changed = false;
-    if (tokens.access_token && tokens.access_token !== user.accessToken) {
+    if (tokens.access_token) {
       user.accessToken = tokens.access_token;
-      changed = true;
     }
-    if (tokens.refresh_token && tokens.refresh_token !== user.refreshToken) {
-      user.refreshToken = tokens.refresh_token;
+    if (tokens.refresh_token) {
+      if (typeof user.setEncryptedRefreshToken === "function") {
+        user.setEncryptedRefreshToken(tokens.refresh_token);
+      } else {
+        setUserRefreshToken(user, tokens.refresh_token);
+      }
       changed = true;
     }
     if (changed) {

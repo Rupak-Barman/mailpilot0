@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { decryptUserRefreshToken, setUserRefreshToken } from "../utils/crypto.js";
 
 const WritingPersonaSchema = new mongoose.Schema(
   {
@@ -28,7 +29,6 @@ const UserSchema = new mongoose.Schema({
   email: String,
   name: String,
   googleId: String,
-  accessToken: String,
   refreshToken: String,
   profileDescription: {
     type: String,
@@ -140,6 +140,14 @@ const UserSchema = new mongoose.Schema({
     }
   ]
 });
+
+UserSchema.methods.getDecryptedRefreshToken = function () {
+  return decryptUserRefreshToken(this);
+};
+
+UserSchema.methods.setEncryptedRefreshToken = function (rawToken) {
+  setUserRefreshToken(this, rawToken);
+};
 
 export default mongoose.models.User ||
   mongoose.model("User", UserSchema);
