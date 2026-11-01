@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   FiArrowLeft,
@@ -13,7 +13,7 @@ import {
   FiInfo,
   FiChevronDown,
   FiChevronUp,
-  FiMessageSquare,
+  FiExternalLink,
 } from "react-icons/fi";
 
 import { Button } from "../../components/common/Button";
@@ -63,6 +63,24 @@ export const EmailActionDetail = ({
   </>
 );
 
+const getStatusTone = (status) => {
+  switch (status) {
+    case "sent":
+      return "emerald";
+    case "draft":
+      return "slate";
+    case "sending":
+      return "amber";
+    case "superseded":
+      return "slate";
+    case "failed":
+    case "send_failed":
+      return "rose";
+    default:
+      return "slate";
+  }
+};
+
 const EmailActionDetailContent = ({
   item,
   onClose,
@@ -83,59 +101,128 @@ const EmailActionDetailContent = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
 
+  // Derive chronological turns (oldest at index 0, newest at end)
+  const turns =
+    item.turns && item.turns.length > 0
+      ? item.turns
+      : [
+          {
+            incomingMessageId: item.sourceMessageId,
+            from: item.to || "Unknown",
+            receivedAt: item.createdAt,
+            incomingSubject: item.subject,
+            incomingSnippet: item.summary,
+            incomingSummary: item.summary,
+            label: item.label,
+            outcome:
+              item.type === "draft"
+                ? "drafted"
+                : item.type === "reply"
+                ? "sent"
+                : item.type === "none"
+                ? "none"
+                : "failed",
+            outgoing: item.body
+              ? {
+                  kind: item.type === "reply" ? "reply" : "draft",
+                  body: item.body,
+                  status:
+                    item.status === "sent"
+                      ? "sent"
+                      : item.status === "draft"
+                      ? "draft"
+                      : item.status || "draft",
+                  sentAt: item.sentAt,
+                  gmailDraftId: item.gmailDraftId,
+                }
+              : null,
+          },
+        ];
+
+  const latestIndex = turns.length - 1;
+  const latestTurn = turns[latestIndex];
+
+  // Latest turn is expanded by default; older turns are collapsed
+  const [expandedTurnIndices, setExpandedTurnIndices] = useState(
+    () => new Set([latestIndex])
+  );
+
   const [form, setForm] = useState({
     to: item.to || "",
     subject: item.subject || "",
-    body: item.body || "",
+    body: latestTurn?.outgoing?.body || item.body || "",
   });
 
   // Label editing state
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [labelValue, setLabelValue] = useState(item.label || "");
-  const [showHistory, setShowHistory] = useState(false);
+
+  const latestTurnRef = useRef(null);
 
   useEffect(() => {
     setForm({
       to: item.to || "",
       subject: item.subject || "",
-      body: item.body || "",
+      body: latestTurn?.outgoing?.body || item.body || "",
     });
 
     setLabelValue(item.label || "");
     setIsEditingLabel(false);
-    setShowHistory(false);
-  }, [item._id, item.to, item.subject, item.body, item.label]);
+    setIsEditing(false);
+    setExpandedTurnIndices(new Set([latestIndex]));
+  }, [item._id, item.to, item.subject, item.body, item.label, latestIndex]);
 
-  const history = item.conversationHistory || [];
-  const hasOlderTurns = history.length > 2;
-  const olderTurns = hasOlderTurns ? history.slice(0, history.length - 2) : [];
+  // Scroll to latest turn on open or item change
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (latestTurnRef.current) {
+        latestTurnRef.current.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+      }
+    }, 120);
 
-  const isDraft = item.type === "draft";
-  const isSent = item.status === "sent";
+    return () => clearTimeout(timer);
+  }, [item._id]);
 
-  const isSendingNow = isSending || item.status === "sending";
+  const toggleTurn = (index) => {
+    setExpandedTurnIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
 
-  const cannotRetry = item.status === "send_failed";
-
+  const latestOutgoingStatus =
+    latestTurn?.outgoing?.status || item.status || "draft";
+  const isDraft =
+    latestTurn?.outgoing?.kind === "draft" || item.type === "draft";
+  const isSent = latestOutgoingStatus === "sent";
+  const isSendingNow = isSending || latestOutgoingStatus === "sending";
+  const cannotRetry = latestOutgoingStatus === "send_failed";
   const canEditDraft =
-    isDraft && (!item.status || item.status === "draft");
+    isDraft &&
+    (!latestOutgoingStatus ||
+      latestOutgoingStatus === "draft" ||
+      latestOutgoingStatus === "failed");
 
   const isBusy =
-    isUpdatingDraft ||
-    isDeletingDraft ||
-    isUpdatingLabel ||
-    isSendingNow;
+    isUpdatingDraft || isDeletingDraft || isUpdatingLabel || isSendingNow;
 
   const handleFieldChange = (event) => {
     const { name, value } = event.target;
-
     setForm((current) => ({
       ...current,
       [name]: value,
     }));
   };
 
-  // Save draft changes
+  // Save draft changes (operates on latest turn's draft)
   const handleSave = () => {
     if (!form.to.trim()) {
       window.alert("Please enter a recipient email address.");
@@ -158,14 +245,14 @@ const EmailActionDetailContent = ({
         onSuccess: () => {
           setIsEditing(false);
         },
-      },
+      }
     );
   };
 
   // Delete draft
   const handleDelete = () => {
     const confirmed = window.confirm(
-      "Permanently delete this draft from Gmail and Mailpilot? This cannot be undone.",
+      "Permanently delete this draft from Gmail and Mailpilot? This cannot be undone."
     );
 
     if (!confirmed) return;
@@ -180,14 +267,21 @@ const EmailActionDetailContent = ({
       return;
     }
 
-    onUpdateLabel(
-      item,
-      labelValue.trim(),
-      () => {
-        setIsEditingLabel(false);
-      },
-    );
+    onUpdateLabel(item, labelValue.trim(), () => {
+      setIsEditingLabel(false);
+    });
   };
+
+  // Original thread context from the first turn
+  const firstTurn = turns[0];
+  const originalSender = firstTurn?.from || item.to || "Unknown";
+  const originalDate = firstTurn?.receivedAt || item.createdAt;
+  const originalSnippet =
+    firstTurn?.incomingSnippet ||
+    firstTurn?.incomingSummary ||
+    item.summary ||
+    "";
+  const effectiveThreadId = item.threadId || item.sourceMessageId;
 
   return (
     <>
@@ -196,8 +290,7 @@ const EmailActionDetailContent = ({
         onClick={onClose}
       />
 
-      <aside className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-slate-200 bg-slate-50 shadow-2xl dark:border-slate-700 dark:bg-slate-950 sm:w-[480px]">
-
+      <aside className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-slate-200 bg-slate-50 shadow-2xl dark:border-slate-700 dark:bg-slate-950 sm:w-[520px]">
         {/* Header */}
         <header className="flex items-center justify-between border-b border-slate-200 p-4 dark:border-slate-800">
           <div className="flex items-center gap-3">
@@ -211,7 +304,7 @@ const EmailActionDetailContent = ({
             </button>
 
             <h2 className="text-xl font-bold text-slate-950 dark:text-slate-50">
-              {titleCase(item.type)} Details
+              {titleCase(item.type || "Conversation")} Details
             </h2>
           </div>
 
@@ -219,16 +312,16 @@ const EmailActionDetailContent = ({
             type="button"
             onClick={onClose}
             aria-label="Close"
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
           >
             <FiX className="h-5 w-5" />
           </button>
         </header>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4">
-
+        <div className="flex-1 overflow-y-auto p-4 space-y-5">
+          {/* Thread meta header */}
           <div className="grid gap-4 border-b border-slate-200 pb-5 dark:border-slate-800 sm:grid-cols-2">
-
             {/* Subject */}
             <div className="sm:col-span-2">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -250,10 +343,10 @@ const EmailActionDetailContent = ({
               )}
             </div>
 
-            {/* Recipient */}
+            {/* Recipient / Partner */}
             <div className="sm:col-span-2">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                To
+                To / Participant
               </p>
 
               {isEditing ? (
@@ -281,9 +374,7 @@ const EmailActionDetailContent = ({
 
               {!isEditingLabel ? (
                 <div className="mt-2 flex items-center gap-2">
-                  <Badge tone="blue">
-                    {item.label || "Uncategorized"}
-                  </Badge>
+                  <Badge tone="blue">{item.label || "Uncategorized"}</Badge>
 
                   {canEditDraft && (
                     <button
@@ -332,184 +423,335 @@ const EmailActionDetailContent = ({
                   </div>
 
                   {labelError && (
-                    <p className="text-xs text-red-600">
-                      {labelError}
-                    </p>
+                    <p className="text-xs text-red-600">{labelError}</p>
                   )}
                 </div>
               )}
             </div>
           </div>
 
-          {/* Thread Conversation History (if earlier turns exist) */}
-          {hasOlderTurns && (
-            <div className="mt-4 border-b border-slate-200 pb-4 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={() => setShowHistory(!showHistory)}
-                className="flex w-full items-center justify-between rounded-md border border-slate-200 bg-slate-100/60 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-100 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-slate-300 dark:hover:bg-zinc-900"
-              >
-                <span className="flex items-center gap-2">
-                  <FiMessageSquare className="h-3.5 w-3.5 text-slate-400" />
-                  Earlier thread history ({olderTurns.length} message{olderTurns.length > 1 ? "s" : ""})
-                </span>
-                {showHistory ? (
-                  <FiChevronUp className="h-4 w-4 text-slate-400" />
-                ) : (
-                  <FiChevronDown className="h-4 w-4 text-slate-400" />
-                )}
-              </button>
+          {/* Chronological Timeline (newest at bottom) */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Conversation Timeline ({turns.length} message{turns.length > 1 ? "s" : ""})
+              </p>
+              <span className="text-[11px] text-slate-400">
+                Newest at bottom
+              </span>
+            </div>
 
-              {showHistory && (
-                <div className="mt-3 space-y-3 pl-1">
-                  {olderTurns.map((turn, idx) => (
+            <div className="space-y-3">
+              {turns.map((turn, index) => {
+                const isLatest = index === latestIndex;
+                const isExpanded = expandedTurnIndices.has(index);
+                const turnOutgoing = turn.outgoing;
+                const turnStatus = turnOutgoing?.status || (isLatest ? item.status : "draft");
+
+                if (!isExpanded) {
+                  return (
                     <div
-                      key={idx}
-                      className={`relative rounded-lg border p-3 text-xs leading-relaxed ${
-                        turn.role === "incoming"
-                          ? "border-slate-200 bg-slate-50 text-slate-700 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-slate-300"
-                          : "border-slate-200 bg-white text-slate-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-slate-200"
-                      }`}
+                      key={turn._id || index}
+                      className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300 dark:border-zinc-800 dark:bg-zinc-900"
                     >
-                      <div className="mb-1.5 flex items-center justify-between">
-                        <span className="font-semibold uppercase tracking-wider text-[10px] text-slate-500 dark:text-slate-400">
-                          {turn.role === "incoming" ? "Incoming Email Summary" : `Sent ${titleCase(turn.type || "Reply")}`}
-                        </span>
-                        {turn.timestamp && (
-                          <span className="text-[10px] text-slate-400">
-                            {formatDateTime(turn.timestamp)}
+                      <button
+                        type="button"
+                        onClick={() => toggleTurn(index)}
+                        className="flex w-full items-center justify-between gap-3 text-left"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-slate-300">
+                            {index + 1}
                           </span>
+                          <span className="truncate text-xs font-medium text-slate-900 dark:text-slate-100">
+                            {turn.from || item.to || "Unknown sender"}
+                          </span>
+                          {turnOutgoing && (
+                            <Badge tone={getStatusTone(turnStatus)}>
+                              {titleCase(turnStatus)}
+                            </Badge>
+                          )}
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span className="text-[11px] text-slate-400">
+                            {formatDateTime(turn.receivedAt || item.createdAt)}
+                          </span>
+                          <FiChevronDown className="h-4 w-4 text-slate-400" />
+                        </div>
+                      </button>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    key={turn._id || index}
+                    ref={isLatest ? latestTurnRef : null}
+                    className={`rounded-lg border p-4 shadow-sm transition ${
+                      isLatest
+                        ? "border-blue-200 bg-white ring-1 ring-blue-500/10 dark:border-blue-900/40 dark:bg-zinc-900"
+                        : "border-slate-200 bg-slate-50/70 dark:border-zinc-800 dark:bg-zinc-900/60"
+                    }`}
+                  >
+                    {/* Turn Header */}
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-zinc-800">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
+                            isLatest
+                              ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                              : "bg-slate-200 text-slate-700 dark:bg-zinc-800 dark:text-slate-300"
+                          }`}
+                        >
+                          {index + 1}
+                        </span>
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                          {isLatest ? "Latest Turn" : `Turn ${index + 1}`}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400">
+                          {formatDateTime(turn.receivedAt || item.createdAt)}
+                        </span>
+                        {!isLatest && (
+                          <button
+                            type="button"
+                            onClick={() => toggleTurn(index)}
+                            className="rounded p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                            aria-label="Collapse turn"
+                          >
+                            <FiChevronUp className="h-4 w-4" />
+                          </button>
                         )}
                       </div>
-                      <p className="whitespace-pre-wrap">{turn.content}</p>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
 
-          {/* Summary Section (placed BEFORE Generated Reply) */}
-          <div className="mt-5">
-            <div className="flex items-center justify-between">
-              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">
-                <FiInfo className="h-3.5 w-3.5 text-slate-400" />
-                Summary
-              </p>
-            </div>
+                    {/* Incoming Section */}
+                    <div className="mt-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-xs">
+                          <span className="font-semibold text-slate-500 dark:text-slate-400">
+                            From:{" "}
+                          </span>
+                          <span className="font-medium text-slate-800 dark:text-slate-200">
+                            {turn.from || item.to || "Unknown sender"}
+                          </span>
+                        </div>
+                        {turn.label && <Badge tone="blue">{turn.label}</Badge>}
+                      </div>
 
-            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50/70 p-3.5 text-sm leading-relaxed text-slate-700 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-slate-300">
-              {item.summary ? (
-                item.summary
-              ) : (
-                <p className="text-xs italic text-slate-400 dark:text-slate-500">
-                  No summary available for this email.
-                </p>
-              )}
+                      {/* Summary */}
+                      <div className="rounded-md border border-slate-200/80 bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-slate-300">
+                        <div className="mb-1 flex items-center gap-1.5 font-semibold uppercase tracking-wider text-[10px] text-slate-500 dark:text-slate-400">
+                          <FiInfo className="h-3 w-3 text-slate-400" />
+                          Incoming Summary
+                        </div>
+                        <p className="whitespace-pre-wrap">
+                          {turn.incomingSummary ||
+                            turn.incomingSnippet ||
+                            item.summary ||
+                            "No summary available"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Outgoing Reply / Draft section */}
+                    {(turnOutgoing ||
+                      turn.outcome === "drafted" ||
+                      turn.outcome === "sent" ||
+                      (isLatest && item.body)) && (
+                      <div className="mt-4 border-t border-slate-100 pt-3 dark:border-zinc-800">
+                        <div className="mb-2 flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                            {turnOutgoing?.kind === "reply" ||
+                            (!turnOutgoing && item.type === "reply") ? (
+                              <FiCornerUpLeft className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                            ) : (
+                              <FiFileText className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />
+                            )}
+                            <span>
+                              {turnOutgoing?.kind === "reply" ||
+                              (!turnOutgoing && item.type === "reply")
+                                ? "Reply"
+                                : "Draft"}
+                            </span>
+                          </div>
+
+                          <Badge tone={getStatusTone(turnStatus)}>
+                            {titleCase(turnStatus)}
+                          </Badge>
+                        </div>
+
+                        {/* Outgoing Body / Editor */}
+                        {isLatest && isEditing ? (
+                          <div className="mt-2 space-y-2">
+                            <textarea
+                              name="body"
+                              value={form.body}
+                              onChange={handleFieldChange}
+                              rows={8}
+                              maxLength={100000}
+                              className="w-full resize-y rounded-lg border border-slate-300 bg-white p-3 text-xs leading-5 text-slate-800 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                            />
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="success"
+                                onClick={handleSave}
+                                disabled={isBusy}
+                              >
+                                <FiSave className="h-3.5 w-3.5" />
+                                {isUpdatingDraft ? "Saving..." : "Save Changes"}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                onClick={() => {
+                                  setForm({
+                                    to: item.to || "",
+                                    subject: item.subject || "",
+                                    body:
+                                      latestTurn?.outgoing?.body ||
+                                      item.body ||
+                                      "",
+                                  });
+                                  setIsEditing(false);
+                                }}
+                                disabled={isBusy}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-2 whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-700 dark:border-zinc-800 dark:bg-zinc-950/60 dark:text-slate-200">
+                            {turnOutgoing?.body ||
+                              (isLatest ? item.body : "") ||
+                              "No outgoing body stored."}
+                          </div>
+                        )}
+
+                        {/* Sent Timestamp */}
+                        {(turnStatus === "sent" || (isLatest && isSent)) && (
+                          <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+                            Sent at:{" "}
+                            {formatDateTime(
+                              turnOutgoing?.sentAt ||
+                                item.sentAt ||
+                                turn.receivedAt
+                            )}
+                          </div>
+                        )}
+
+                        {/* Actions on Latest Turn */}
+                        {isLatest && canEditDraft && !isEditing && (
+                          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2 dark:border-zinc-800">
+                            <Button
+                              variant="ghost"
+                              onClick={() => setIsEditing(true)}
+                              disabled={isBusy}
+                            >
+                              <FiEdit2 className="h-3.5 w-3.5" />
+                              Edit
+                            </Button>
+
+                            <Button
+                              variant="ghost"
+                              onClick={handleDelete}
+                              disabled={isBusy}
+                            >
+                              <FiTrash2 className="h-3.5 w-3.5" />
+                              {isDeletingDraft ? "Deleting..." : "Delete"}
+                            </Button>
+
+                            {!isSent && (
+                              <Button
+                                variant="success"
+                                onClick={() => onSendDraft(item)}
+                                disabled={isBusy || cannotRetry}
+                              >
+                                <FiSend className="h-3.5 w-3.5" />
+                                {isSendingNow ? "Sending..." : "Send Now"}
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Outcome for non-outgoing turns */}
+                    {!turnOutgoing && turn.outcome === "none" && (
+                      <div className="mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800">
+                        <Badge tone="slate">No reply needed</Badge>
+                      </div>
+                    )}
+                    {!turnOutgoing && turn.outcome === "needs_manual" && (
+                      <div className="mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800">
+                        <Badge tone="amber">Needs manual review</Badge>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
-          {/* Generated information */}
-          <div className="mt-6 flex items-center justify-between">
-            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
-              {item.type === "reply" ? (
-                <FiCornerUpLeft className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-              ) : (
-                <FiFileText className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-              )}
-
-              Generated {item.type}
-            </p>
-
-            <p className="text-sm text-slate-400">
-              {formatDateTime(item.createdAt)}
-            </p>
-          </div>
-
-          {/* Email Body */}
-          {isEditing ? (
-            <div className="mt-4">
-              <label
-                htmlFor="draft-body"
-                className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-400"
-              >
-                Email Body
-              </label>
-
-              <textarea
-                id="draft-body"
-                name="body"
-                value={form.body}
-                onChange={handleFieldChange}
-                rows={12}
-                maxLength={100000}
-                className="w-full resize-y rounded-lg border border-slate-300 bg-white p-4 text-sm leading-6 text-slate-800 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-              />
-            </div>
-          ) : (
-            <div className="mt-4 whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-100 p-4 text-sm leading-6 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
-              {item.body || "No generated body stored."}
-            </div>
-          )}
-
-          {/* Sent status */}
-          {isSent && (
-            <div className="mt-4">
-              <Badge tone="emerald">
-                Successfully sent
-              </Badge>
-
-              {item.sentAt && (
-                <p className="mt-2 text-xs text-slate-500">
-                  Sent at: {formatDateTime(item.sentAt)}
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Send failed warning */}
+          {/* Error messages */}
+          {sendError && <p className="text-sm text-red-600">{sendError}</p>}
+          {updateError && <p className="text-sm text-red-600">{updateError}</p>}
+          {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
           {cannotRetry && (
-            <p className="mt-4 text-sm text-amber-700 dark:text-amber-300">
+            <p className="text-sm text-amber-700 dark:text-amber-300">
               The sending result could not be confirmed. Check your Gmail Sent
               folder before taking further action.
             </p>
           )}
 
-          {/* Errors */}
-          {sendError && (
-            <p className="mt-4 text-sm text-red-600">
-              {sendError}
-            </p>
-          )}
-
-          {updateError && (
-            <p className="mt-4 text-sm text-red-600">
-              {updateError}
-            </p>
-          )}
-
-          {deleteError && (
-            <p className="mt-4 text-sm text-red-600">
-              {deleteError}
-            </p>
-          )}
-
           {/* Original Thread Context */}
           <div className="mt-6 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/60">
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Original Thread Context
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Original Thread Context
+              </p>
+              {effectiveThreadId && (
+                <a
+                  href={`https://mail.google.com/mail/u/0/#inbox/${effectiveThreadId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-500 hover:underline dark:text-blue-400"
+                >
+                  Open in Gmail
+                  <FiExternalLink className="h-3.5 w-3.5" />
+                </a>
+              )}
+            </div>
 
-            <p className="mt-3 break-words text-sm leading-6 text-slate-500 dark:text-slate-400">
-              Source message id: {item.sourceMessageId || "Unavailable"}
-            </p>
+            <div className="mt-3 space-y-1.5 text-xs text-slate-600 dark:text-slate-300">
+              <p>
+                <span className="font-semibold text-slate-500 dark:text-slate-400">
+                  Sender:{" "}
+                </span>
+                {originalSender}
+              </p>
+              <p>
+                <span className="font-semibold text-slate-500 dark:text-slate-400">
+                  Date:{" "}
+                </span>
+                {formatDateTime(originalDate)}
+              </p>
+              {originalSnippet && (
+                <p className="mt-1 line-clamp-3 text-slate-500 dark:text-slate-400">
+                  <span className="font-semibold">Snippet: </span>
+                  {originalSnippet}
+                </p>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Footer */}
         <footer className="flex flex-col gap-3 border-t border-slate-200 p-4 dark:border-slate-800">
           <div className="flex flex-wrap items-center justify-between gap-2">
-
             <Button
               variant="ghost"
               onClick={() => {
@@ -517,9 +759,8 @@ const EmailActionDetailContent = ({
                   setForm({
                     to: item.to || "",
                     subject: item.subject || "",
-                    body: item.body || "",
+                    body: latestTurn?.outgoing?.body || item.body || "",
                   });
-
                   setIsEditing(false);
                 } else {
                   onClose();
@@ -530,32 +771,8 @@ const EmailActionDetailContent = ({
               {isEditing ? "Cancel" : "Close"}
             </Button>
 
-            <div className="flex flex-wrap gap-2">
-
-              {/* Edit and Delete */}
-              {canEditDraft && !isEditing && !isEditingLabel && (
-                <>
-                  <Button
-                    variant="ghost"
-                    onClick={() => setIsEditing(true)}
-                    disabled={isBusy}
-                  >
-                    <FiEdit2 className="h-4 w-4" />
-                    Edit
-                  </Button>
-
-                  <Button
-                    variant="ghost"
-                    onClick={handleDelete}
-                    disabled={isBusy}
-                  >
-                    <FiTrash2 className="h-4 w-4" />
-                    {isDeletingDraft ? "Deleting..." : "Delete"}
-                  </Button>
-                </>
-              )}
-
-              {/* Save Draft */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Save Draft when editing */}
               {isEditing && (
                 <Button
                   variant="success"
@@ -567,25 +784,7 @@ const EmailActionDetailContent = ({
                 </Button>
               )}
 
-              {/* Send Draft */}
-              {isDraft && !isEditing && !isEditingLabel && !isSent && (
-                <Button
-                  variant="success"
-                  onClick={() => onSendDraft(item)}
-                  disabled={isBusy || cannotRetry}
-                >
-                  <FiSend className="h-4 w-4" />
-                  {isSendingNow ? "Sending..." : "Send Now"}
-                </Button>
-              )}
-
-              {isSent && (
-                <Badge tone="emerald">
-                  Sent
-                </Badge>
-              )}
-
-              {/* Checked status */}
+              {/* Checked toggle button */}
               {!isEditing && !isEditingLabel && (
                 <Button
                   variant={item.checked ? "ghost" : "success"}
@@ -593,9 +792,7 @@ const EmailActionDetailContent = ({
                   disabled={isSaving || isBusy}
                 >
                   <FiCheckCircle className="h-4 w-4" />
-                  {item.checked
-                    ? "Mark as Unchecked"
-                    : "Mark as Checked"}
+                  {item.checked ? "Mark as Unchecked" : "Mark as Checked"}
                 </Button>
               )}
             </div>
