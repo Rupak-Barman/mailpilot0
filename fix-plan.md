@@ -176,12 +176,12 @@ On every poll run, before processing new messages, query `ProcessedEmail` for ro
 - Per-user lock using in-memory `Set` is lost on restart → acceptable for local-first deployment; document this.
 
 ### Test plan
-- [ ] Send 3 test emails rapidly; verify all 3 are processed (not just 1).
-- [ ] Confirm `User.gmailHistoryId` is set after first sync.
-- [ ] Confirm second sync uses history.list (check server logs).
-- [ ] Send email from own address; confirm it is skipped.
-- [ ] Simulate `invalid_grant`; confirm `needsRelogin=true` is set and Topbar shows warning.
-- [ ] Confirm Ollama health check prints useful error if Ollama not running.
+- [x] Send 3 test emails rapidly; verify all 3 are processed (not just 1).
+- [x] Confirm `User.gmailHistoryId` is set after first sync.
+- [x] Confirm second sync uses history.list (check server logs).
+- [x] Send email from own address; confirm it is skipped.
+- [x] Simulate `invalid_grant`; confirm `needsRelogin=true` is set and Topbar shows warning.
+- [x] Confirm Ollama health check prints useful error if Ollama not running.
 
 ---
 

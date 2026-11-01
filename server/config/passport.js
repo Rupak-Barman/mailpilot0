@@ -19,7 +19,10 @@ async (accessToken, refreshToken, profile, done) => {
       email: profile.emails[0].value,
       name: profile.displayName,
       accessToken,
-      refreshToken: refreshToken || existing?.refreshToken
+      refreshToken: refreshToken || existing?.refreshToken,
+      needsRelogin: false,
+      syncStatus: "idle",
+      syncError: null
     },
     { upsert: true, new: true }
   );
