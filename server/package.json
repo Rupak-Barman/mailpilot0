@@ -24,7 +24,8 @@
   "scripts": {
     "dev": "node --dns-result-order=ipv4first --watch app.js",
     "start": "node --dns-result-order=ipv4first app.js",
-    "test": "node --test \"tests/**/*.test.js\""
+    "test": "node --test \"tests/**/*.test.js\"",
+    "check:env": "node tools/check-env-docs.js"
   },
   "keywords": [],
   "author": "",

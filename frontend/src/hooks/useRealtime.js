@@ -34,7 +34,7 @@ export const useRealtime = () => {
   }
 
   useEffect(() => {
-    const authToken = token || localStorage.getItem("sendora_token");
+    const authToken = token || localStorage.getItem("mailpilot_token");
     if (!authToken) {
       setStatus("disconnected");
       return;

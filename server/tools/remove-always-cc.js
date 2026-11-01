@@ -68,6 +68,12 @@ export async function removeAlwaysCc({ dryRun = false, logger = console } = {}) 
 }
 
 async function runCli() {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log("Usage: node server/tools/remove-always-cc.js [--dry-run]");
+    console.log("Idempotently unsets deprecated settings.defaultCc and labels.alwaysCc across all users.");
+    process.exit(0);
+  }
+
   const isDryRun = process.argv.includes("--dry-run");
 
   if (!process.env.MONGO_URI) {
@@ -104,3 +110,4 @@ const isMain =
 if (isMain) {
   runCli();
 }
+

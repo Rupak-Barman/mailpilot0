@@ -199,6 +199,12 @@ export async function generateRagDistanceReport({
 
 async function cli() {
   const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("Usage: node server/tools/rag-distance-report.js <dataset.json> <labelIdOrName> [--user <userIdOrEmail>]");
+    console.log("Example: node server/tools/rag-distance-report.js eval-emails.json Support");
+    process.exit(0);
+  }
+
   let filePath = null;
   let labelArg = null;
   let userArg = null;

@@ -108,3 +108,4 @@ export const DeleteRuleDialog = ({
     </div>
   );
 };
+

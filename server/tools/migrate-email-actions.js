@@ -368,6 +368,12 @@ export async function migrateEmailActions({
  * CLI Entry point
  */
 async function runCli() {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log("Usage: node server/tools/migrate-email-actions.js [--dry-run]");
+    console.log("Migrates legacy flat EmailAction documents to conversation turns schema.");
+    process.exit(0);
+  }
+
   const isDryRun = process.argv.includes("--dry-run");
 
   if (!process.env.MONGO_URI) {

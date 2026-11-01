@@ -1271,8 +1271,22 @@ These tests must pass before marking the fix plan complete.
 - [x] 7.6 Axios 401 interceptor
 - [x] 7.7 Update `.env.example` files
 
-### Batch 8 – README
-- [ ] 8.1 Write complete README.md (13 sections)
+### Batch 8 – Documentation
+- [x] 8.1 Write `server/tools/check-env-docs.js` and npm script `check:env`
+- [x] 8.2 Synchronize and document all variables in `server/.env.example` and `frontend/.env.example`
+- [x] 8.3 Write unit tests in `server/tests/check-env-docs.test.js`
+- [x] 8.4 Write comprehensive root `README.md` (13 sections in specified order)
+- [x] 8.5 Create `CHANGELOG.md` summarizing all batches and upgrade notes
+- [x] 8.6 Add `server/tools/backfill-processed-outcome.js` and tests in `server/tests/backfill-outcome.test.js`
+- [x] 8.7 Fix leftover branding (`sendora_token` -> `mailpilot_token` in `frontend/src/hooks/useRealtime.js`)
+- [x] 8.8 Report on `server/models/Knowledge.js` and legacy migration code
+
+#### Report on `server/models/Knowledge.js` and migration code in `knowledge.routes.js`:
+- **Current State**: `Knowledge.js` is only imported by `server/routes/knowledge.routes.js` (line 10) and queried during `GET /api/knowledge` (lines 197–266) to perform lazy migration of legacy pre-LanceDB MongoDB knowledge chunks (expecting 768-dim embeddings).
+- **Can it be removed now?**:
+  - For new deployments and migrated instances: **Yes**, it is never written to. All active knowledge vectors live in LanceDB (`vectorStore.service.js`) and document metadata in `KnowledgeDocument.js`.
+  - For legacy databases where users have not yet logged in: removing it without an offline script would drop backwards compatibility for those unmigrated MongoDB records.
+  - Per instructions, **no files or migration code were deleted**. It can be deprecated or moved to an offline tool when legacy support is fully phased out.
 
 ### Batch 9 – Root Package & Scripts
 - [ ] 9.1 Add `dev` (`node --watch app.js`), `start` (`node app.js`), and `test` (`node --test tests/`) scripts to `server/package.json`

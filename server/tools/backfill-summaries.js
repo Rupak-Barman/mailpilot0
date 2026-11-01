@@ -315,6 +315,12 @@ export async function backfillSummaries(options = {}) {
  */
 async function runCli() {
   const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("Usage: node server/tools/backfill-summaries.js [--dry-run] [--limit <n>] [--delay <ms>]");
+    console.log("Generates Ollama summaries for older turns lacking incoming email summaries.");
+    process.exit(0);
+  }
+
   const dryRun = args.includes("--dry-run");
 
   const limitIdx = args.indexOf("--limit");
