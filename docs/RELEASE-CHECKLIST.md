@@ -200,3 +200,4 @@ Because automated tests cannot send live Gmail emails or interact with third-par
   - The server recovers gracefully without crashing.
   - Stale processing recovery detects in-flight items older than 5 minutes.
   - Claim-first deduplication prevents duplicate emails or duplicate Gmail drafts.
+

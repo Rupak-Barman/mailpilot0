@@ -115,3 +115,4 @@ export default {
   registerShutdownHandlers,
   _resetShutdownState
 };
+

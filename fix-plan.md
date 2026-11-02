@@ -696,14 +696,14 @@ Replace the "Try AI draft anyway" button in the Failed view with a collapsible A
 #### 1. Stage-by-Stage Trace Table
 
 Sample tested:
-`"Dear Rupak, My career goals are to excel in CSE engineering and build a successful business. I aim to leverage technology to innovate and solve complex problems. Sincerely, Rupak Barman"`
+`"Dear Rupak, My career goals are to excel in CSE engineering and build a successful business. I aim to leverage technology to innovate and solve complex problems. Sincerely, Rupak"`
 
 | Stage | Case (a): Run-on (no newlines) | Case (b): Literal `\n` sequences | Case (c): Real `\n` newlines |
 |---|---|---|---|
-| **1. Raw Ollama Response** | `{"body": "Dear Rupak, My career goals... Sincerely, Rupak Barman"}` | `{"body": "Dear Rupak,\n\nMy career goals...\n\nSincerely,\nRupak Barman"}` | `{"body": "Dear Rupak,\n\nMy career goals...\n\nSincerely,\nRupak Barman"}` |
+| **1. Raw Ollama Response** | `{"body": "Dear Rupak, My career goals... Sincerely, Rupak"}` | `{"body": "Dear Rupak,\n\nMy career goals...\n\nSincerely,\nRupak"}` | `{"body": "Dear Rupak,\n\nMy career goals...\n\nSincerely,\nRupak"}` |
 | **2. After JSON Parsing** | One long string, 0 newline characters | String containing literal `\n` characters | String containing actual `\n` newlines |
 | **3. After Cleaning/Normalising** | Unchanged (no `\n` to convert) | `\n` converted to real newline `\n` | Real newlines normalized (`\r\n` -> `\n`) |
-| **4. Greeting / Sign-Off Stripping & Injection** | **STRUCTURE LOST:** `stripGreetingsAndSignOffs` regex strictly required `\n+` before sign-off closings (`/\n+(?:sincerely...)/`). In Case (a), `Sincerely, Rupak Barman` was preceded by a space, not `\n+`, so it was **NOT stripped**. Code then injected `Best regards,\nRupak Barman`, creating a double sign-off. Furthermore, in revise mode, `framingMatched` failed to match `Hi Rupak,`, misidentifying the model's `Dear Rupak` as a user edit and leaving the model framing completely untouched! | Model greeting stripped; model sign-off stripped (if preceded by `\n+`). Code greeting and sign-off injected. | Model greeting and sign-off stripped if preceded by `\n+`. Code greeting and sign-off injected. |
+| **4. Greeting / Sign-Off Stripping & Injection** | **STRUCTURE LOST:** `stripGreetingsAndSignOffs` regex strictly required `\n+` before sign-off closings (`/\n+(?:sincerely...)/`). In Case (a), `Sincerely, Rupak` was preceded by a space, not `\n+`, so it was **NOT stripped**. Code then injected `Best regards,\nRupak`, creating a double sign-off. Furthermore, in revise mode, `framingMatched` failed to match `Hi Rupak,`, misidentifying the model's `Dear Rupak` as a user edit and leaving the model framing completely untouched! | Model greeting stripped; model sign-off stripped (if preceded by `\n+`). Code greeting and sign-off injected. | Model greeting and sign-off stripped if preceded by `\n+`. Code greeting and sign-off injected. |
 | **5. API Response Body** | Body had 0 paragraph breaks; model sign-off remained embedded inside body text. | Preserved whatever paragraphs were emitted, but prompt contract `{"body": string}` rarely yielded multi-paragraph structure. | Preserved `\n\n` if model emitted them, but still lacked paragraph enforcement. |
 | **6. Frontend State & Textarea / Preview** | Textarea and read-only div display a single run-on block with no paragraph breaks. | Textarea rendered lines matching `\n`. | Textarea rendered lines matching `\n`. |
 | **7. Saved outgoing.body & Gmail MIME** | Plain text part lacked blank lines between body sentences. HTML part split on `/\n\s*\n/` resulted in length 1, creating a **single `<p>` tag** for the entire body text. | Plain text kept `\n\n`; HTML split into `<p>` elements. | Plain text kept `\n\n`; HTML split into `<p>` elements. |
@@ -1304,7 +1304,7 @@ These tests must pass before marking the fix plan complete.
 
 ## Fresh-Clone Verification Report (Batch 9 Execution)
 
-A fresh-clone verification was conducted by executing a clean clone of this repository into a temporary directory (`C:\Users\barma\AppData\Local\Temp\mailpilot-fresh-clone-test`) and running the complete onboarding workflow:
+A fresh-clone verification was conducted by executing a clean clone of this repository into a temporary directory (`%TEMP%/mailpilot-fresh-clone-test`) and running the complete onboarding workflow:
 
 1. **`npm run setup`**:
    - Successfully created `server/.env` and `frontend/.env` from `.env.example` templates without overwriting.
